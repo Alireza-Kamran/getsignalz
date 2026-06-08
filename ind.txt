@@ -1,0 +1,874 @@
+//@version=5
+indicator(".:: FVG+TWB+RSI-BG+OB+LP+UT+SSL by Kamran ::.", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// Heikin Ashi Calculation
+heikinashi() =>
+    ha_open = float(na)
+    ha_close = float(na)
+    ha_high = float(na)
+    ha_low = float(na)
+    
+    ha_open := na(ha_open[1]) ? (open + close) / 2 : (ha_open[1] + ha_close[1]) / 2
+    ha_close := (open + high + low + close) / 4
+    ha_high := math.max(high, math.max(ha_open, ha_close))
+    ha_low := math.min(low, math.min(ha_open, ha_close))
+    
+    [ha_open, ha_high, ha_low, ha_close]
+
+// ========== UT Bot Alerts Settings ==========
+show_ut_bot = input.bool(false, title="Enable UT Bot Alerts", group="UT Bot Settings", inline="")
+ut_a = input.float(1, title="UT Bot Key Value (Sensitivity)", group="UT Bot Settings", inline="")
+ut_c = input.int(10, title="UT Bot ATR Period", group="UT Bot Settings", inline="")
+ut_h = input.bool(false, title="UT Bot Signals from Heikin Ashi Candles", group="UT Bot Settings", inline="")
+
+// (Divergence feature removed)
+
+// ========== Liquidity Pools Inputs ==========
+// Liquidity Identification
+cNum = input.int(2, minval = 2, title = "Zone Contact Amount", group = "Liquidity Pools - Identification", tooltip = "The number of times price must bounce from this zone before considering it as a liquidity pool.  \n\nHigher == Less Zones that are 'More Precise'\nLower == More Zones that are 'Less precise'", inline="")
+gapCount = input.int(5, minval = 0, title = "Bars Required Between Each Contact", group = "Liquidity Pools - Identification", tooltip = "The number of bars to wait before checking for another zone contact.", inline="")
+wait = input.int(10, title = "Confirmation Bars", tooltip = "Used to Confirm Zones for Validity. \n Waits [X] Bars before drawing Zone.", group = "Liquidity Pools - Identification", inline="")
+
+// Style
+volTog = input.bool(true, title = "Display Volume Labels", group = "Liquidity Pools - Style", inline="")
+volSize = str.lower(input.string("Small", title = "Volume Label Size", options = ["Tiny","Small","Normal","Large","Huge"], group = "Liquidity Pools - Style", inline=""))
+
+bullColorLP = input.color(color.new(#feb49a,80), title = "Bull Zone Color  ", group = "Liquidity Pools - Style", inline="") 
+bearColorLP = input.color(color.new(#848a9b,80), title = "Bear Zone Color", group = "Liquidity Pools - Style", inline="")
+canTog = input.bool(false, title = "Fill Candles Inside Zones", group = "Liquidity Pools - Style", tooltip = "Fills Candles that are inside the last liquidity zone.\n\nNOTE: The candles will only be filled AFTER the Zone is generated. Candles fills will not overlap the zone it is referencing.", inline="")
+bullCanColor = input.color(#feb49a, title = "Bull Candle Fill  ", group = "Liquidity Pools - Style", inline="") 
+bearCanColor = input.color(#848a9b, title = "Bear Candle Fill", group = "Liquidity Pools - Style", inline="")
+
+// ========== FVG+TWB Inputs ==========
+// Trendlines with Breaks Settings
+length_tl = input.int(14, 'Swing Detection Lookback', group="Trendlines", inline="")
+mult_tl = input.float(1., 'Slope', minval=0, step=.1, group="Trendlines", inline="")
+calcMethod = input.string('Atr', 'Slope Calculation Method', options=['Atr','Stdev','Linreg'], group="Trendlines", inline="")
+backpaint = input(true, 'Backpainting', tooltip='Backpainting offset displayed elements in the past. Disable backpainting to see real time information returned by the indicator.', group="Trendlines", inline="")
+showBreakoutLabels = input.bool(false, 'Show Breakout Labels', group="Trendlines", inline="")
+
+// Trendlines Style
+upCss = input.color(#feb49a, 'Up Trendline Color', group="Trendlines Style", inline="")
+dnCss = input.color(#848a9b, 'Down Trendline Color', group="Trendlines Style", inline="")
+showExt = input(true, 'Show Extended Lines', group="Trendlines Style", inline="")
+showTrendlines = input.bool(false, 'Show Trendlines', group="Trendlines Style", inline="")
+
+// Fair Value Gap Settings
+thresholdPer = input.float(0, "Threshold %", minval=0, maxval=100, step=.1, inline='threshold', group="FVG")
+auto = input(false, "Auto", inline='threshold', group="FVG")
+
+showLast = input.int(0, 'Unmitigated Levels', minval=0, group="FVG", inline="")
+mitigationLevels = input.bool(false, 'Mitigation Levels', group="FVG", inline="")
+
+tf = input.timeframe('', "Timeframe", group="FVG", inline="")
+
+// FVG Style
+extend = input.int(20, 'Extend', minval=0, inline='extend', group="FVG Style")
+dynamic = input(false, 'Dynamic', inline='extend', group="FVG Style")
+
+bullCss = input.color(color.new(#feb49a, 70), "Bullish FVG", group="FVG Style", inline="")
+bearCss = input.color(color.new(#848a9b, 70), "Bearish FVG", group="FVG Style", inline="")
+
+// FVG Dashboard
+showDash = input(false, 'Show Dashboard', group='FVG Dashboard', inline="")
+dashLoc = input.string('Top Right', 'Location', options=['Top Right', 'Bottom Right', 'Bottom Left'], group='FVG Dashboard', inline="")
+textSize = input.string('Small', 'Size', options=['Tiny', 'Small', 'Normal'], group='FVG Dashboard', inline="")
+
+// ========== RSI Inputs ==========
+rsiLengthInput = input.int(14, minval=1, title="RSI Length", group="RSI Settings")
+rsiSourceInput = input.source(close, "Source", group="RSI Settings")
+
+// ========== Order Block Inputs ==========
+length = input.int(5, 'Volume Pivot Length', minval=1, group="Order Blocks", inline="")
+
+bull_ext_last = input.int(3, 'Bullish OB ', minval=1, inline='bull_ob', group="Order Blocks")
+bg_bull_css = input.color(color.new(#feb49a, 80), '', inline='bull_ob', group="Order Blocks")
+bull_css = input.color(#feb49a, '', inline='bull_ob', group="Order Blocks")
+bull_avg_css = input.color(color.new(#9598a1, 37), '', inline='bull_ob', group="Order Blocks")
+
+bear_ext_last = input.int(3, 'Bearish OB', minval=1, inline='bear_ob', group="Order Blocks")
+bg_bear_css = input.color(color.new(#848a9b, 80), '', inline='bear_ob', group="Order Blocks")
+bear_css = input.color(#848a9b, '', inline='bear_ob', group="Order Blocks")
+bear_avg_css = input.color(color.new(#9598a1, 37), '', inline='bear_ob', group="Order Blocks")
+
+line_style = input.string('⎯⎯⎯', 'Average Line Style', options=['⎯⎯⎯', '----', '····'], group="Order Blocks", inline="")
+line_width = input.int(1, 'Average Line Width', minval=1, group="Order Blocks", inline="")
+mitigation = input.string('Wick', 'Mitigation Methods', options=['Wick', 'Close'], group="Order Blocks", inline="")
+
+// UT Bot Alerts Logic
+xATR = ta.atr(ut_c)
+nLoss = ut_a * xATR
+[ha_open, ha_high, ha_low, ha_close] = heikinashi()
+src = ut_h ? ha_close : close
+
+xATRTrailingStop = 0.0
+xATRTrailingStop := src > nz(xATRTrailingStop[1], 0) and src[1] > nz(xATRTrailingStop[1], 0) ? math.max(nz(xATRTrailingStop[1]), src - nLoss) :
+   src < nz(xATRTrailingStop[1], 0) and src[1] < nz(xATRTrailingStop[1], 0) ? math.min(nz(xATRTrailingStop[1]), src + nLoss) : 
+   src > nz(xATRTrailingStop[1], 0) ? src - nLoss : src + nLoss
+ 
+pos = 0   
+pos := src[1] < nz(xATRTrailingStop[1], 0) and src > nz(xATRTrailingStop[1], 0) ? 1 :
+   src[1] > nz(xATRTrailingStop[1], 0) and src < nz(xATRTrailingStop[1], 0) ? -1 : nz(pos[1], 0) 
+   
+xcolor = pos == -1 ? #848a9b: pos == 1 ? #feb49a : color.blue 
+
+ema = ta.ema(src,1)
+above = ta.crossover(ema, xATRTrailingStop)
+below = ta.crossover(xATRTrailingStop, ema)
+
+buy = src > xATRTrailingStop and above 
+sell = src < xATRTrailingStop and below
+
+barbuy = src > xATRTrailingStop 
+barsell = src < xATRTrailingStop 
+
+// Use conditional operator for plotshape
+plotshape(show_ut_bot and buy ? true : na, title = "Buy", text = 'L', style = shape.labelup, location = location.belowbar, color= color.new(#feb49a, 0), textcolor = color.white, size = size.tiny)
+plotshape(show_ut_bot and sell ? true : na, title = "Sell", text = 'S', style = shape.labeldown, location = location.abovebar, color= color.new(#848a9b, 0), textcolor = color.white, size = size.tiny)
+
+// Use conditional operator for barcolor
+barcolor(show_ut_bot and barbuy ? #feb49a : na)
+barcolor(show_ut_bot and barsell ? #848a9b : na)
+
+// Alert conditions
+alertcondition(show_ut_bot and buy, "UT Long", "UT Long")
+alertcondition(show_ut_bot and sell, "UT Short", "UT Short")
+
+// ========== Liquidity Pools Calculations ==========
+invis = color.rgb(0,0,0,100)
+
+type data
+    float h
+    float t
+    float b
+    float l
+    int bi
+
+type zn
+    box bx
+    int state
+    line ln
+    float vol
+    label lab
+
+//Candle (Body) Top/Bottom
+c_top = math.max(open,close)
+c_bot = math.min(open,close)
+
+//Current Candle Data
+cur = data.new(high,c_top,c_bot,low,bar_index)
+
+//Highest and Lowest Candle Data
+var data hst = data.new(high,c_top,c_bot,low,bar_index)
+var data lst = data.new(high,c_top,c_bot,low,bar_index)
+
+//High/Low Contact Counts
+var int h_count = 0
+var int l_count = 0
+ 
+//Last Wick Bar Indexes
+var int last_h_wick = bar_index
+var int last_l_wick = bar_index
+
+//Historical Zone Array (Un-Mitigated)
+var bull_zones = array.new<zn>(na)
+var bear_zones = array.new<zn>(na)
+
+//Running Zones
+var zn h_zn = zn.new(na,na,na,na,na)
+var zn l_zn = zn.new(na,na,na,na,na)
+
+//Plot Candle Fill Points
+float g_o = na
+float g_h = na
+float g_l = na
+float g_c = na
+
+float r_o = na
+float r_h = na
+float r_l = na
+float r_c = na
+
+//Running Volume Totals
+var float hi_vol = 0
+var float lo_vol = 0
+
+//Get Candle Fill Points
+get_cfp(_bx) =>
+    top = _bx.get_top()
+    bot = _bx.get_bottom()
+    _o = c_top < bot ? bot : c_top > top ? top : c_top
+    _h = high < bot ? bot : high > top ? top : high
+    _l = low < bot ? bot : low > top ? top : low
+    _c = c_bot < bot ? bot : c_bot > top ? top : c_bot
+    [_o,_h,_l,_c]
+
+//Get Candle Inside Volume
+get_civ(_bx) =>
+    top = _bx.get_top()
+    bot = _bx.get_bottom()
+    _r = high - low
+    _h = high > top ? top : high
+    _l = low < bot ? bot : low
+    _vol = nz((_h - _l) / _r, 1) * volume
+    _vol
+
+//Adjusting High and Low Check Boundaries
+if (high > hst.h) and ((c_top > hst.h) or (c_top < hst.t))
+    if h_count > 1
+        lst := cur
+        lo_vol := 0
+        l_count := 0
+    hst := cur
+    hi_vol := 0
+    h_count := 1
+    last_h_wick := bar_index
+
+if (low < lst.l) and ((c_bot < lst.l) or (c_bot > lst.b))
+    if l_count > 1
+        hst := cur
+        hi_vol := 0
+        h_count := 0
+    lst := cur
+    lo_vol := 0
+    l_count := 1
+    last_l_wick := bar_index
+
+//Counting Contacts
+var int bs_hw = 0
+var int bs_lw = 0
+
+h_wick = high > hst.t and c_top <= hst.t
+l_wick = low < lst.b and c_bot >= lst.b
+
+if (h_wick[1] and (hst.t[1] == hst.t[2]) and (bs_hw > gapCount))
+    h_count += 1
+    last_h_wick := bar_index[1]
+
+if (l_wick[1] and (lst.b[1] == lst.b[2]) and (bs_lw > gapCount))
+    l_count += 1
+    last_l_wick := bar_index[1]
+
+bs_hw := math.abs(last_h_wick - bar_index)
+bs_lw := math.abs(last_l_wick - bar_index)
+
+//High/Low Tracking for Zone Outer Extremes
+if (high > hst.h)
+    hst.h := high
+if (low < lst.l)
+    lst.l := low
+
+//Volume Tracking
+hst_vol = (math.max((high - hst.t),0) / (high-low)) * volume
+lst_vol = (math.max((lst.b - low),0)/ (high-low)) * volume
+
+hi_vol += nz(hst_vol)
+lo_vol += nz(lst_vol)
+
+//Zone Management (Creation & Merging)
+if (h_count >= cNum) and ta.crossover(bs_hw,wait) and (close < hst.t)
+    top = h_zn.bx.get_top()
+    bot = h_zn.bx.get_bottom()
+
+    if hst.bi == h_zn.bx.get_left()
+        h_zn.bx.set_top(math.max(hst.h,top))
+        h_zn.bx.set_bottom(math.min(hst.t,top))
+    else if (hst.h <= top) and (hst.t >= top)
+        h_zn.bx.set_right(bar_index)
+        h_zn.vol += hi_vol
+        bear_zones.push(h_zn)
+    else if ((hst.h > top) and (hst.t < top)) or ((hst.h > top) and (hst.t < top)) or ((hst.h > top) and (hst.t < top))
+        h_zn.bx.set_top(math.max(hst.t,top))
+        h_zn.bx.set_bottom(math.min(hst.h,top))
+        h_zn.bx.set_right(bar_index)
+        h_zn.vol += hi_vol
+        bear_zones.push(h_zn)
+    else
+        h_zn := zn.new(box.new(hst.bi, hst.h, bar_index, hst.t, bgcolor = bearColorLP, border_color = na),
+          0, 
+          line.new(hst.bi, hst.t, bar_index, na, color = color.new(bearColorLP,0)),
+          hi_vol, 
+          label.new(bar_index,na, color = invis, text = str.tostring(hi_vol,format.volume) + "\n", textcolor = color.new(bearColorLP,0), style = label.style_label_right, size = volSize,  textalign = text.align_right))
+        
+        bear_zones.push(h_zn)
+
+if (l_count >= cNum) and ta.crossover(bs_lw,wait) and (close > lst.b)
+    top = l_zn.bx.get_top()
+    bot = l_zn.bx.get_bottom()
+
+    if lst.bi == l_zn.bx.get_left()
+        l_zn.bx.set_top(math.max(lst.b,top))
+        l_zn.bx.set_bottom(math.min(lst.l,bot))
+    else if (lst.b <= top) and (lst.l >= bot)
+        l_zn.bx.set_right(bar_index)
+        l_zn.vol += lo_vol
+        bull_zones.push(l_zn)
+    else if ((lst.b > top) and (lst.l < top)) or ((lst.b > bot) and (lst.l < bot)) or ((lst.b > top) and (lst.l < bot))
+        l_zn.bx.set_top(math.max(lst.b,top))
+        l_zn.bx.set_bottom(math.min(lst.l,bot))
+        l_zn.bx.set_right(bar_index)
+        l_zn.vol += lo_vol
+        bull_zones.push(l_zn)
+    else
+        l_zn := zn.new(box.new(lst.bi, lst.b, bar_index, lst.l, bgcolor = bullColorLP, border_color = na),
+          0, 
+          line.new(lst.bi, lst.b, bar_index, na, color = color.new(bullColorLP,0)),
+          lo_vol, 
+          label.new(bar_index,na, color = invis, text = "\n" + str.tostring(lo_vol,format.volume), textcolor = color.new(bullColorLP,0), style = label.style_label_right, size = volSize, textalign = text.align_right))
+        
+        bull_zones.push(l_zn)
+
+//Zone Management (Extention & Deletion)
+//Bull Zones
+if bull_zones.size() > 0
+    for i = bull_zones.size()-1 to 0
+        z = bull_zones.get(i)
+        bot = z.bx.get_bottom()
+        top = z.bx.get_top()
+        if (i == bull_zones.size()-1)
+            if (close > top)
+                z.ln.set_y1(top)
+                z.ln.set_xy2(bar_index,top)
+                if volTog
+                    z.lab.set_xy(bar_index,top)
+            if ((high < top and high > bot) or (low < top and low > bot) or (high >= top and low <= bot))
+                z.vol += get_civ(z.bx)
+                if (z.bx.get_left() == l_zn.bx.get_left())
+                    [_o,_h,_l,_c] = get_cfp(l_zn.bx)
+                    g_o := _o
+                    g_h := _h
+                    g_l := _l
+                    g_c := _c
+            z.lab.set_text("\n" + str.tostring(z.vol,format.volume))
+        else if (l_zn.bx.get_bottom() > bot)
+            z.ln.set_y2(na)
+            z.lab.set_y(na)
+        if (close < bot)
+            if (z.state < 0)
+                bull_zones.remove(i)
+            z.state -= 1
+        else
+            z.state := 0
+
+//Bear Zones
+if bear_zones.size() > 0
+    for i = bear_zones.size()-1 to 0
+        z = bear_zones.get(i)
+        bot = z.bx.get_bottom()
+        top = z.bx.get_top()       
+        if (i == bear_zones.size()-1)
+            if (close < bot)
+                z.ln.set_y1(bot)
+                z.ln.set_xy2(bar_index,bot)
+                if volTog
+                    z.lab.set_xy(bar_index,bot)
+            if ((high < top and high > bot) or (low < top and low > bot) or (high >= top and low <= bot))
+                z.vol += get_civ(z.bx)
+                if (h_zn.bx.get_left() == z.bx.get_left()) 
+                    [_o,_h,_l,_c] = get_cfp(h_zn.bx)
+                    r_o := _o
+                    r_h := _h
+                    r_l := _l
+                    r_c := _c
+            z.lab.set_text(str.tostring(z.vol,format.volume) + "\n")
+        else if (h_zn.bx.get_top() < bot)
+            z.ln.set_y2(na)
+            z.lab.set_y(na)
+        if (close > top)
+            if (z.state < 0)
+                bear_zones.remove(i)
+            z.state -= 1
+        else
+            z.state := 0
+
+//Colored Candles
+plotcandle((canTog?g_o:na),g_h,g_l,g_c, 
+  wickcolor = bullCanColor, 
+  color = bullCanColor, 
+  bordercolor = (g_o == g_c ? invis : bullCanColor), 
+  display = display.pane, 
+  editable = false)
+
+plotcandle((canTog?r_o:na),r_h,r_l,r_c, 
+  wickcolor = bearCanColor, 
+  color = bearCanColor, 
+  bordercolor = (r_o == r_c ? invis : bearCanColor), 
+  display = display.pane, 
+  editable = false)
+
+// ========== FVG+TWB Calculations ==========
+var slope_ph = 0.
+var slope_pl = 0.
+
+var offset = backpaint ? length_tl : 0
+
+n = bar_index
+src_tl = close
+
+ph_tl = ta.pivothigh(length_tl, length_tl)
+pl_tl = ta.pivotlow(length_tl, length_tl)
+
+//Slope Calculation Method
+slope = switch calcMethod
+    'Atr'    => ta.atr(length_tl) / length_tl * mult_tl
+    'Stdev'  => ta.stdev(src_tl,length_tl) / length_tl * mult_tl
+    'Linreg' => math.abs(ta.sma(src_tl * n, length_tl) - ta.sma(src_tl, length_tl) * ta.sma(n, length_tl)) / ta.variance(n, length_tl) / 2 * mult_tl
+
+//Get slopes and calculate trendlines
+slope_ph := ph_tl ? slope : slope_ph
+slope_pl := pl_tl ? slope : slope_pl
+
+var upper_tl = 0.
+var lower_tl = 0.
+upper_tl := ph_tl ? ph_tl : upper_tl - slope_ph
+lower_tl := pl_tl ? pl_tl : lower_tl + slope_pl
+
+var upos = 0
+var dnos = 0
+upos := ph_tl ? 0 : close > upper_tl - slope_ph * length_tl ? 1 : upos
+dnos := pl_tl ? 0 : close < lower_tl + slope_pl * length_tl ? 1 : dnos
+
+//Extended Lines
+var uptl  = line.new(na,na,na,na, color = upCss, style = line.style_dashed, extend = extend.right)
+var dntl  = line.new(na,na,na,na, color = dnCss, style = line.style_dashed, extend = extend.right)
+
+if ph_tl and showExt
+    uptl.set_xy1(n-offset, backpaint ? ph_tl : upper_tl - slope_ph * length_tl)
+    uptl.set_xy2(n-offset+1, backpaint ? ph_tl - slope : upper_tl - slope_ph * (length_tl+1))
+
+if pl_tl and showExt
+    dntl.set_xy1(n-offset, backpaint ? pl_tl : lower_tl + slope_pl * length_tl)
+    dntl.set_xy2(n-offset+1, backpaint ? pl_tl + slope : lower_tl + slope_pl * (length_tl+1))
+
+//Plots
+plot(showTrendlines ? (backpaint ? upper_tl : upper_tl - slope_ph * length_tl) : na, 'Upper', color = ph_tl ? na : upCss, offset = -offset)
+plot(showTrendlines ? (backpaint ? lower_tl : lower_tl + slope_pl * length_tl) : na, 'Lower', color = pl_tl ? na : dnCss, offset = -offset)
+
+//Breakouts
+// plotshape(upos > upos[1] ? low : na, "Upper Break"
+//   , shape.labelup
+//   , location.absolute
+//   , upCss
+//   , text = "B"
+//   , textcolor = color.white
+//   , size = size.tiny)
+
+// plotshape(dnos > dnos[1] ? high : na, "Lower Break"
+//   , shape.labeldown
+//   , location.absolute
+//   , dnCss
+//   , text = "B"
+//   , textcolor = color.white
+//   , size = size.tiny)
+
+// ========== FVG Calculations ==========
+// UDT for FVG
+type fvg
+    float max
+    float min
+    bool  isbull
+    int   t = time
+
+// Methods/Functions
+method tosolid(color id)=> color.rgb(color.r(id),color.g(id),color.b(id))
+
+detect()=>
+    var new_fvg = fvg.new(na, na, na, na)
+    threshold = auto ? ta.cum((high - low) / low) / bar_index : thresholdPer / 100
+
+    bull_fvg = low > high[2] and close[1] > high[2] and (low - high[2]) / high[2] > threshold
+    bear_fvg = high < low[2] and close[1] < low[2] and (low[2] - high) / high > threshold
+    
+    if bull_fvg
+        new_fvg := fvg.new(low, high[2], true)
+    else if bear_fvg
+        new_fvg := fvg.new(low[2], high, false)
+
+    [bull_fvg, bear_fvg, new_fvg]
+
+// FVG's detection/display
+var float max_bull_fvg = na, var float min_bull_fvg = na, var bull_count = 0, var bull_mitigated = 0
+var float max_bear_fvg = na, var float min_bear_fvg = na, var bear_count = 0, var bear_mitigated = 0
+var t = 0
+
+var fvg_records = array.new<fvg>(0)
+var fvg_areas = array.new<box>(0)
+var fvg_top_lines = array.new<line>(0)
+var fvg_bottom_lines = array.new<line>(0)
+
+[bull_fvg, bear_fvg, new_fvg] = request.security(syminfo.tickerid, tf, detect())
+
+// Bull FVG's
+if bull_fvg and new_fvg.t != t
+    if dynamic
+        max_bull_fvg := new_fvg.max
+        min_bull_fvg := new_fvg.min
+    
+    // Populate FVG array
+    if not dynamic
+        fvg_areas.unshift(box.new(n-2, new_fvg.max, n+extend, new_fvg.min, na, bgcolor = bullCss))
+        fvg_top_lines.unshift(line.new(n - 2, new_fvg.max, n, new_fvg.max, extend=extend.right, color=bullCss.tosolid(), width=1, style=line.style_dotted))
+        fvg_bottom_lines.unshift(line.new(n - 2, new_fvg.min, n, new_fvg.min, extend=extend.right, color=bullCss.tosolid(), width=1, style=line.style_dotted))
+    fvg_records.unshift(new_fvg)
+
+    bull_count += 1
+    t := new_fvg.t
+else if dynamic
+    max_bull_fvg := math.max(math.min(close, max_bull_fvg), min_bull_fvg)
+
+// Bear FVG's
+if bear_fvg and new_fvg.t != t
+    if dynamic
+        max_bear_fvg := new_fvg.max
+        min_bear_fvg := new_fvg.min
+    
+    // Populate FVG array
+    if not dynamic
+        fvg_areas.unshift(box.new(n-2, new_fvg.max, n+extend, new_fvg.min, na, bgcolor = bearCss))
+        fvg_top_lines.unshift(line.new(n - 2, new_fvg.max, n, new_fvg.max, extend=extend.right, color=bearCss.tosolid(), width=1, style=line.style_dotted))
+        fvg_bottom_lines.unshift(line.new(n - 2, new_fvg.min, n, new_fvg.min, extend=extend.right, color=bearCss.tosolid(), width=1, style=line.style_dotted))
+    fvg_records.unshift(new_fvg)
+
+    bear_count += 1
+    t := new_fvg.t
+else if dynamic
+    min_bear_fvg := math.min(math.max(close, min_bear_fvg), max_bear_fvg) 
+
+// Test for mitigation
+if fvg_records.size() > 0
+    for i = fvg_records.size()-1 to 0
+        get = fvg_records.get(i)
+
+        if get.isbull
+            if close < get.min
+                // Display line if mitigated
+                if mitigationLevels
+                    line.new(get.t
+                      , get.min
+                      , time
+                      , get.min
+                      , xloc.bar_time
+                      , color = bullCss
+                      , style = line.style_dashed)
+
+                // Delete box
+                if not dynamic
+                    area = fvg_areas.remove(i)
+                    area.delete()
+                    top_line = fvg_top_lines.remove(i)
+                    top_line.delete()
+                    bottom_line = fvg_bottom_lines.remove(i)
+                    bottom_line.delete()
+
+                fvg_records.remove(i)
+                bull_mitigated += 1
+        else if close > get.max
+            // Display line if mitigated
+            if mitigationLevels
+                line.new(get.t
+                  , get.max
+                  , time
+                  , get.max
+                  , xloc.bar_time
+                  , color = bearCss
+                  , style = line.style_dashed)
+
+            // Delete box
+            if not dynamic
+                area = fvg_areas.remove(i)
+                area.delete()
+                top_line = fvg_top_lines.remove(i)
+                top_line.delete()
+                bottom_line = fvg_bottom_lines.remove(i)
+                bottom_line.delete()
+            
+            fvg_records.remove(i)
+            bear_mitigated += 1
+
+// Unmitigated lines
+var unmitigated = array.new<line>(0)
+
+// Remove unmitigated lines 
+if barstate.islast and showLast > 0 and fvg_records.size() > 0
+    if unmitigated.size() > 0 
+        for element in unmitigated
+            element.delete()
+        unmitigated.clear()
+
+    for i = 0 to math.min(showLast-1, fvg_records.size()-1)
+        get = fvg_records.get(i)
+
+        unmitigated.push(line.new(get.t
+          , get.isbull ? get.min : get.max 
+          , time
+          , get.isbull ? get.min : get.max
+          , xloc.bar_time
+          , color = get.isbull ? bullCss : bearCss
+          , width=1
+          , style=line.style_dotted))
+
+// Dashboard
+var table_position = dashLoc == 'Bottom Left' ? position.bottom_left 
+  : dashLoc == 'Top Right' ? position.top_right 
+  : position.bottom_right
+
+var table_size = textSize == 'Tiny' ? size.tiny 
+  : textSize == 'Small' ? size.small 
+  : size.normal
+
+var tb = table.new(table_position, 3, 3
+  , bgcolor = #1e222d
+  , border_color = #373a46
+  , border_width = 1
+  , frame_color = #373a46
+  , frame_width = 1)
+
+if showDash
+    if barstate.isfirst
+        tb.cell(1, 0, 'Bullish', text_color = bullCss.tosolid(), text_size = table_size)
+        tb.cell(2, 0, 'Bearish', text_color = bearCss.tosolid(), text_size = table_size)
+    
+        tb.cell(0, 1, 'Count', text_size = table_size, text_color = color.white)
+        tb.cell(0, 2, 'Mitigated', text_size = table_size, text_color = color.white)
+    
+    if barstate.islast
+        tb.cell(1, 1, str.tostring(bull_count), text_color = bullCss.tosolid(), text_size = table_size)
+        tb.cell(2, 1, str.tostring(bear_count), text_color = bearCss.tosolid(), text_size = table_size)
+        
+        tb.cell(1, 2, str.tostring(bull_mitigated / bull_count * 100, format.percent), text_color = bullCss.tosolid(), text_size = table_size)
+        tb.cell(2, 2, str.tostring(bear_mitigated / bear_count * 100, format.percent), text_color = bearCss.tosolid(), text_size = table_size)
+
+// (Removed FVG plots/fills to reduce plot count)
+
+// Alerts
+alertcondition(bull_count > bull_count[1], 'Bullish FVG', 'Bullish FVG detected')
+alertcondition(bear_count > bear_count[1], 'Bearish FVG', 'Bearish FVG detected')
+
+alertcondition(bull_mitigated > bull_mitigated[1], 'Bullish FVG Mitigation', 'Bullish FVG mitigated')
+alertcondition(bear_mitigated > bear_mitigated[1], 'Bearish FVG Mitigation', 'Bearish FVG mitigated')
+
+// ========== Order Block Calculations ==========
+//Line Style function
+get_line_style(style) =>
+    out = switch style
+        '⎯⎯⎯'  => line.style_solid
+        '----' => line.style_dashed
+        '····' => line.style_dotted
+
+//Function to get order block coordinates
+get_coordinates(condition, top, btm, ob_val)=>
+    var ob_top  = array.new_float(0)
+    var ob_btm  = array.new_float(0)
+    var ob_avg  = array.new_float(0)
+    var ob_left = array.new_int(0)
+
+    float ob = na
+
+    //Append coordinates to arrays
+    if condition
+        avg = math.avg(top, btm)
+        
+        array.unshift(ob_top, top)
+        array.unshift(ob_btm, btm)
+        array.unshift(ob_avg, avg)
+        array.unshift(ob_left, time[length])
+        
+        ob := ob_val
+    
+    [ob_top, ob_btm, ob_avg, ob_left, ob]
+
+//Function to remove mitigated order blocks from coordinate arrays
+remove_mitigated(ob_top, ob_btm, ob_left, ob_avg, target, bull)=>
+    mitigated = false
+    target_array = bull ? ob_btm : ob_top
+
+    for element in target_array
+        idx = array.indexof(target_array, element)
+
+        if (bull ? target < element : target > element)
+            mitigated := true
+
+            array.remove(ob_top, idx)
+            array.remove(ob_btm, idx)
+            array.remove(ob_avg, idx)
+            array.remove(ob_left, idx)
+    
+    mitigated
+
+//Function to set order blocks
+set_order_blocks(ob_top, ob_btm, ob_left, ob_avg, ext_last, bg_css, border_css, lvl_css)=>
+    var ob_box = array.new_box(0)
+    var ob_lvl = array.new_line(0)
+
+    //Fill arrays with boxes/lines
+    if barstate.isfirst
+        for i = 0 to ext_last-1
+            array.unshift(ob_box, box.new(na,na,na,na
+              , xloc = xloc.bar_time
+              , extend= extend.right
+              , bgcolor = bg_css
+              , border_color = color.new(border_css, 70)))
+
+            array.unshift(ob_lvl, line.new(na,na,na,na
+              , xloc = xloc.bar_time
+              , extend = extend.right
+              , color = lvl_css
+              , style = get_line_style(line_style)
+              , width = line_width))
+
+    //Set order blocks
+    if barstate.islast
+        if array.size(ob_top) > 0
+            for i = 0 to math.min(ext_last-1, array.size(ob_top)-1)
+                get_box = array.get(ob_box, i)
+                get_lvl = array.get(ob_lvl, i)
+
+                box.set_lefttop(get_box, array.get(ob_left, i), array.get(ob_top, i))
+                box.set_rightbottom(get_box, array.get(ob_left, i), array.get(ob_btm, i))
+
+                line.set_xy1(get_lvl, array.get(ob_left, i), array.get(ob_avg, i))
+                line.set_xy2(get_lvl, array.get(ob_left, i)+1, array.get(ob_avg, i))
+
+//Global elements 
+var os = 0
+var target_bull = 0.
+var target_bear = 0.
+
+upper_ob = ta.highest(length)
+lower_ob = ta.lowest(length)
+
+if mitigation == 'Close'
+    target_bull := ta.lowest(close, length)
+    target_bear := ta.highest(close, length)
+else
+    target_bull := lower_ob
+    target_bear := upper_ob
+
+os := high[length] > upper_ob ? 0 : low[length] < lower_ob ? 1 : os[1]
+
+phv = ta.pivothigh(volume, length, length)
+
+//Get bullish/bearish order blocks coordinates 
+[bull_top, bull_btm, bull_avg, bull_left, bull_ob] = get_coordinates(not na(phv) and os == 1, hl2[length], low[length], low[length])
+[bear_top, bear_btm, bear_avg, bear_left, bear_ob] = get_coordinates(not na(phv) and os == 0, high[length], hl2[length], high[length])
+
+//Remove mitigated order blocks
+mitigated_bull = remove_mitigated(bull_top, bull_btm, bull_left, bull_avg, target_bull, true)
+mitigated_bear = remove_mitigated(bear_top, bear_btm, bear_left, bear_avg, target_bear, false)
+
+//Display order blocks
+set_order_blocks(bull_top, bull_btm, bull_left, bull_avg, bull_ext_last, bg_bull_css, bull_css, bull_avg_css)
+set_order_blocks(bear_top, bear_btm, bear_left, bear_avg, bear_ext_last, bg_bear_css, bear_css, bear_avg_css)
+        
+//Combine order block plots into a single plot
+
+// ========== RSI Calculations ==========
+// RSI Calculation (kept for background fill)
+change = ta.change(rsiSourceInput)
+up = ta.rma(math.max(change, 0), rsiLengthInput)
+down = ta.rma(-math.min(change, 0), rsiLengthInput)
+rsi_value = down == 0 ? 100 : up == 0 ? 0 : 100 - (100 / (1 + up / down))
+
+// Keep p_rsi for background fill calculation
+p_rsi = request.security(syminfo.tickerid, timeframe.period, rsi_value)
+
+// Add RSI value to the status line
+plot(p_rsi)
+
+// Fill between RSI levels (on the main pane) - KEPT as requested
+bgcolor(p_rsi >= 70 ? color.new(#848a9b, 85) : p_rsi <= 30 ? color.new(#feb49a, 88) : na)
+
+// ========== SSL Channel (Integrated) ==========
+// Inputs
+ssl_wicks = input.bool(false, "SSL: Take Wicks into Account?", group = "SSL Channel")
+ssl_highlight = input.bool(true, "SSL: Highlight State?", group = "SSL Channel")
+
+ssl_ma(source, length, type) =>
+    type == "SMA" ? ta.sma(source, length) :
+     type == "EMA" ? ta.ema(source, length) :
+     type == "SMMA (RMA)" ? ta.rma(source, length) :
+     type == "WMA" ? ta.wma(source, length) :
+     type == "VWMA" ? ta.vwma(source, length) :
+     na
+
+// Channel #1
+ssl1_show_ma_high   = input.bool(true, "MA High", inline = "SSL #1", group = "SSL Channel #1")
+ssl1_type_high      = input.string("SMA", "", inline = "SSL #1", options = ["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group = "SSL Channel #1")
+ssl1_source_high    = input.source(high, "", inline = "SSL #1", group = "SSL Channel #1")
+ssl1_length_high    = input.int(200, "", inline = "SSL #1", minval = 1, group = "SSL Channel #1")
+ssl1_color_high     = input.color(#feb49a, "", inline = "SSL #1", group = "SSL Channel #1")
+ssl1_ma_high        = ssl_ma(ssl1_source_high, ssl1_length_high, ssl1_type_high)
+
+ssl1_show_ma_low    = input.bool(true, "MA Low", inline = "SSL #1b", group = "SSL Channel #1")
+ssl1_type_low       = input.string("SMA", "", inline = "SSL #1b", options = ["SMA", "EMA", "SMMA (RMA)", "WMA", "VWMA"], group = "SSL Channel #1")
+ssl1_source_low     = input.source(low, "", inline = "SSL #1b", group = "SSL Channel #1")
+ssl1_length_low     = input.int(200, "", inline = "SSL #1b", minval = 1, group = "SSL Channel #1")
+ssl1_color_low      = input.color(#848a9b, "", inline = "SSL #1b", group = "SSL Channel #1")
+ssl1_ma_low         = ssl_ma(ssl1_source_low, ssl1_length_low, ssl1_type_low)
+
+ssl1_show_labels    = input.bool(false, "Show Buy/Sell Labels?", group = "SSL Channel #1")
+
+// Logic #1
+ssl1_hlv = float(na)
+ssl1_hlv := (ssl_wicks ? high : close) > ssl1_ma_high ? 1 : (ssl_wicks ? low : close) < ssl1_ma_low ? -1 : ssl1_hlv[1]
+ssl1_up   = ssl1_hlv < 0 ? ssl1_ma_low : ssl1_ma_high
+ssl1_down = ssl1_hlv < 0 ? ssl1_ma_high : ssl1_ma_low
+ssl1_color = ssl1_hlv == 1 ? ssl1_color_high : ssl1_color_low
+ssl1_fill_color = ssl_highlight ? color.new(ssl1_color, 90) : na
+
+ssl1_high_line = plot(ssl1_show_ma_high ? ssl1_up : na, title = "SSL1 UP", linewidth = 2, color = ssl1_color)
+ssl1_low_line  = plot(ssl1_show_ma_low  ? ssl1_down : na, title = "SSL1 DOWN", linewidth = 2, color = ssl1_color)
+
+plotshape(ssl1_show_ma_high and ssl1_show_labels and ssl1_hlv == 1 and ssl1_hlv[1] == -1, title = "SSL1 Buy Label", text = "Buy", location = location.belowbar, style = shape.labelup, size = size.tiny, color = ssl1_color, textcolor = color.white)
+plotshape(ssl1_show_ma_low and ssl1_show_labels and ssl1_hlv == -1 and ssl1_hlv[1] == 1, title = "SSL1 Sell Label", text = "Sell", location = location.abovebar, style = shape.labeldown, size = size.tiny, color = ssl1_color, textcolor = color.white)
+
+fill(ssl1_high_line, ssl1_low_line, color = ssl1_fill_color)
+
+// Alerts
+alertcondition(ssl1_hlv == 1 and ssl1_hlv[1] == -1, title = "SSL Channel (1) Buy Alert", message = "SSL Channel (1): BUY")
+alertcondition(ssl1_hlv == -1 and ssl1_hlv[1] == 1, title = "SSL Channel (1) Sell Alert", message = "SSL Channel (1): SELL")
+
+// ========== ATR x RSI Stop Loss ==========
+sl_enable = input.bool(true, "Enable SL Suggest", group = "ATR x RSI SL")
+sl_show = input.bool(false, "Show Stop Loss Lines", group = "ATR x RSI SL")
+sl_lengthATR = input.int(6, title = "ATR Length", group = "ATR x RSI SL")
+sl_lengthRSI = input.int(13, title = "RSI Length", group = "ATR x RSI SL")
+sl_rsi_source = input.source(close, title = "RSI Source", group = "ATR x RSI SL")
+sl_price_source = input.source(open, title = "Candle Source", group = "ATR x RSI SL")
+
+sl_atr = ta.atr(sl_lengthATR)
+sl_rsi = ta.rsi(sl_rsi_source, sl_lengthRSI)
+
+float sl_rsi_mul = na
+if sl_rsi >= 30 and sl_rsi < 50
+    sl_rsi_mul := 1.4 - 0.0466 * (50 - sl_rsi)
+else if sl_rsi >= 50 and sl_rsi <= 70
+    sl_rsi_mul := 1 + 0.0466 * (sl_rsi - 50)
+else
+    sl_rsi_mul := na
+
+sl_stop_long = na(sl_rsi_mul) ? na : sl_price_source - sl_atr * sl_rsi_mul
+sl_stop_short = na(sl_rsi_mul) ? na : sl_price_source + sl_atr * sl_rsi_mul
+
+plot(sl_enable and sl_show ? sl_stop_long : na, title = "Long Stop Loss", color = color.new(#feb49a, 0), linewidth = 1, style = plot.style_cross)
+plot(sl_enable and sl_show ? sl_stop_short : na, title = "Short Stop Loss", color = color.new(#848a9b, 0), linewidth = 1, style = plot.style_cross)
+
+// ========== Alerts for All Indicators ==========
+// Trendlines with Breaks Alerts
+alertcondition(upos > upos[1], 'Upward Breakout', 'Price broke the down-trendline upward')
+alertcondition(dnos > dnos[1], 'Downward Breakout', 'Price broke the up-trendline downward')
+
+// Order Block Alerts
+alertcondition(not na(bull_ob), 'Bullish OB Formed', 'Bullish order block detected')
+alertcondition(not na(bear_ob), 'Bearish OB Formed', 'bearish order block detected')
+alertcondition(mitigated_bull, 'Bullish OB Mitigated', 'Bullish order block mitigated')
+alertcondition(mitigated_bear, 'Bearish OB Mitigated', 'bearish order block mitigated')
+
+// Combined Signal Alerts
+// Short Signal: Price in OB zone AND RSI >= 70 (uses p_rsi)
+shortCondition = not na(bear_ob) and p_rsi >= 70
+alertcondition(shortCondition, 'Short Signal', 'ETH Short: Price in Bearish OB zone with RSI >= 70')
+
+// Long Signal: Price in OB zone AND RSI <= 30 (uses p_rsi)
+longCondition = not na(bull_ob) and p_rsi <= 30
+alertcondition(longCondition, 'Long Signal', 'ETH Long: Price in Bullish OB zone with RSI <= 30')
