@@ -24,7 +24,8 @@ POLL   = 20       # seconds between polls
 TF     = "1h"     # primary timeframe
 
 # ── Internal state ─────────────────────────────────────────────────────────────
-_open_trades   = {}
+_open_trades    = {}
+_cooldown_until = {}   # coin -> epoch-seconds when 1h SL cooldown expires
 _nightly_done  = None
 _weekly_done   = None
 _version_done  = None
@@ -96,6 +97,8 @@ def _check_closed(positions, account_val):
 
             logger.info(f"CLOSED {coin} | {'+' if lev_pct>0 else ''}{lev_pct:.1f}% | {hit.upper()}")
             log_trade_close(coin, exit_px, hit, lev_pct, dur)
+            if hit == "sl":
+                _cooldown_until[coin] = int(time.time()) + 3600
             max_adverse = t.get("max_adverse_pct", 0.0)
             stats = tracker.close_position(coin, exit_px, hit, lev_pct, balance_before, balance_after)
 
@@ -310,7 +313,9 @@ def run():
             # ── Find and execute best setup ───────────────────────────────────
             # Use union of HL positions + locally tracked to prevent double-entry
             # when a just-opened trade isn't reflected in HL positions yet
-            already_open = {**positions, **{c: {} for c in _open_trades}}
+            _now = int(time.time())
+            already_open = {**positions, **{c: {} for c in _open_trades},
+                            **{c: {} for c, exp in _cooldown_until.items() if _now < exp}}
             if len(already_open) < MAX_TRADES:
                 best = find_best_setup(already_open, hour_utc=h)
 

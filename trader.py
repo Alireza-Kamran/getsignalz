@@ -10,15 +10,28 @@ from indicators import (fetch_candles, rsi, atr, adx, ut_bot, ssl_channel,
 
 # ── Coins to monitor ──────────────────────────────────────────────────────────
 WATCHLIST = [
-    "ETH", "WLD", "ARB", "SUI", "SOL", "INJ", "AAVE", "AVAX", "ATOM", "OP", "RUNE", "BNB", "APT", "DOGE"
+    "ETH",
+    "WLD",
+    "ARB",
+    "SUI",
+    "SOL",
+    "INJ",
+    "AAVE",
+    "AVAX",
+    "ATOM",
+    "OP",
+    "RUNE",
+    "BNB",
+    "APT",
+    "DOGE"
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
-MIN_SCORE   = 8       # minimum confluence to open a trade
+MIN_SCORE   = 9       # minimum confluence to open a trade
 MIN_ADX     = 30
 TP_RATIO    = 2.0     # risk:reward
 RISK_PCT    = 0.02    # 3% account risk per trade
-MAX_TRADES  = 2
+MAX_TRADES  = 1
 
 # ── Session: London + NY only (07:00 - 22:00 UTC) ────────────────────────────
 SESSION_START = 8
@@ -115,6 +128,7 @@ def score_setup(df, direction, macro_trend=0):
     if direction == 1 and ssl != 1:   return 0, [], None, None
     if direction == -1 and ssl != -1: return 0, [], None, None
     if direction == 1 and r >= 68:    return 0, [], None, None  # overbought = bad long
+    if direction == -1 and r <= 25:                          return 0, [], None, None  # ultra-oversold = exhausted move, poor short entry
     if direction == -1 and r <= 32 and last["adx"] <= 40:   return 0, [], None, None
     if not is_trending(df):           return 0, [], None, None  # ranging market = skip
 
@@ -224,6 +238,8 @@ def score_setup(df, direction, macro_trend=0):
             sl = price * 0.985  # 1.5% fallback
 
     sl_pct = abs(price - sl) / price * 100
+    if sl_pct < 0.4:
+        return 0, [], None, None, None, None, None
 
     MAX_LEV_LOSS = 25.0   # max 25% leveraged loss at SL
     MAX_LEVERAGE = 25.0
