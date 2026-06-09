@@ -118,7 +118,7 @@ def _post_scan(states, account_val, positions, hour_utc):
         if s is None: continue
         ssl_e  = "🟢" if s["ssl"]==1 else ("🔴" if s["ssl"]==-1 else "⚪️")
         macro_e = "↑" if s["macro"]==1 else ("↓" if s["macro"]==-1 else "→")
-        sig    = f"  🔔<b>{s['best_score']}/14</b>" if s["best_score"] >= MIN_SCORE else ""
+        sig    = f"  🔔<b>{s['best_score']}/13</b>" if s["best_score"] >= MIN_SCORE else ""
         lines.append(
             f"{ssl_e} <b>{s['coin']}</b> ${s['price']:.4f}  "
             f"RSI {s['rsi']:.0f}  ADX {s['adx']:.0f}  {macro_e}{sig}"
@@ -175,10 +175,11 @@ def run():
     # Clean up lockfile on exit
     import atexit
     atexit.register(_release_lock)
+    _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
 
     logger.info("="*55)
     logger.info("  GETSIGNALZ AI — ONLINE")
-    logger.info(f"  Coins: {len(WATCHLIST)} | TF: {TF} | Min score: {MIN_SCORE}/14")
+    logger.info(f"  Coins: {len(WATCHLIST)} | TF: {TF} | Min score: {MIN_SCORE}/13")
     logger.info(f"  Session: 07:00-22:00 UTC | Quiet: 02:00-04:00 UTC")
     logger.info("="*55)
 
@@ -299,7 +300,7 @@ def run():
                 s = quick_state(coin, TF)
                 if s:
                     states.append(s)
-                    sig = f"  ◄ SIGNAL {s['best_score']}/14" if s["best_score"] >= MIN_SCORE else ""
+                    sig = f"  ◄ SIGNAL {s['best_score']}/13" if s["best_score"] >= MIN_SCORE else ""
                     logger.info(f"{coin:<6} ${s['price']:.4f}  RSI {s['rsi']:.0f}  "
                                 f"ADX {s['adx']:.0f}  SSL {s['ssl']:+d}{sig}")
             # Scan summary stays in logs only — no channel post
@@ -322,7 +323,7 @@ def run():
                 if best:
                     logger.info(
                         f"SIGNAL {best['coin']} {'LONG' if best['direction']==1 else 'SHORT'} "
-                        f"score={best['score']}/14"
+                        f"score={best['score']}/13"
                     )
                     risk_usd = account_val * RISK_PCT
 

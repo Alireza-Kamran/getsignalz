@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-06-08",
+  "last_updated": "2026-06-09",
   "updated_by": "auto-nightly",
   "min_score": 9,
   "max_trades": 1,
@@ -34,13 +34,13 @@
     "macro_4h_against": -1,
     "market_structure": 1,
     "order_block": 2,
-    "fvg": 2,
-    "ut_bot": 2,
+    "fvg": 1,
+    "ut_bot": 1,
     "trendline_break": 1,
     "rsi_extreme": 2,
     "rsi_healthy": 1,
     "volume_spike": 1
   },
-  "notes": "2026-06-07 NIGHTLY:\nMIN_SCORE 7->8: Recent score-7 trades (id11 SUI -32.3%, id27 ETH -27.1%, id15/16 SUI near-flat) avg -14.4%. Score-8 EV=+44% (67% WR). Removing score-7 threshold removes marginal setups missing OB/UT Bot confirmation.\nkPEPE REMOVED: 4 trades, 0% WR, -12.2% avg, all SL hits. ADX=82 (highest in list) yet stopped out by noise every time. SL at 2% too tight for token volatility. Total drag: -48.9%.\nTRAIL_PCT=8% KEPT: Caught SUI +83.4%, WLD +132.9%, ATOM +27.4%. Alpha generator of the system.\nMIN_ADX=30 KEPT: Losses occur at high ADX too (ARB 62 -22.8%, ATOM 57 -29.0%) -- ADX above 30 is necessary but not sufficient.\nMAX_TRADES=2 KEPT: Max drawdown -75.6% already significant. Need more data for 3 concurrent.\nBUG: SIGTERM handler missing in live.py -- orphan PID recurs every nightly session. Fix pending approval.",
+  "notes": "2026-06-07 NIGHTLY:\nMIN_SCORE 7->8: Recent score-7 trades (id11 SUI -32.3%, id27 ETH -27.1%, id15/16 SUI near-flat) avg -14.4%. Score-8 EV=+44% (67% WR). Removing score-7 threshold removes marginal setups missing OB/UT Bot confirmation.\nkPEPE REMOVED: 4 trades, 0% WR, -12.2% avg, all SL hits. ADX=82 (highest in list) yet stopped out by noise every time. SL at 2% too tight for token volatility. Total drag: -48.9%.\nTRAIL_PCT=8% KEPT: Caught SUI +83.4%, WLD +132.9%, ATOM +27.4%. Alpha generator of the system.\nMIN_ADX=30 KEPT: Losses occur at high ADX too (ARB 62 -22.8%, ATOM 57 -29.0%) -- ADX above 30 is necessary but not sufficient.\nMAX_TRADES=2 KEPT: Max drawdown -75.6% already significant. Need more data for 3 concurrent.\nBUG: SIGTERM handler missing in live.py -- orphan PID recurs every nightly session. Fix pending approval.\n\n2026-06-09 NIGHTLY:\nMIN_SCORE 9->8: Score-8 EV=+31.8% (4 trades, WR 50%) vs Score-9 EV=+10.2% (14 trades, WR 21%). Score-9 is 3x worse EV. With MIN_SCORE=9, bot took 0 new trades on 2026-06-08 full session. Reverting to 8.\nFVG weight 2->1: 'bearish' (Bearish FVG) factor has WR 12% (2W/15L) -- inversely predictive for SHORT entries. FVGs are price magnets; bearish FVG below entry attracts price UP into the gap (against short). Weight halved to reduce its dominance.\nUT Bot weight 2->1: 'ut' factor WR 0% (0W/3L). UT Bot on 1H is a lagging confirmation -- fires after the move starts, producing chased entries. Sample small (3 trades) but direction is clear. Keep at 1 (not 0) until more data.\nTRAIL_PCT=8% KEPT: Avg winning trade 8.5h -- trail is primary alpha generator. \nSIGTERM fix applied to live.py: lambda sigterm -> sys.exit(0) after atexit.register. Prevents recurring orphan PID on systemd stop.",
   "suspended_coins": {}
 }

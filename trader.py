@@ -114,7 +114,7 @@ def is_trending(df) -> bool:
 
 def score_setup(df, direction, macro_trend=0):
     """
-    Score a potential trade 0-14. Only trade >= MIN_SCORE.
+    Score a potential trade 0-13. Only trade >= MIN_SCORE.
     Returns (score, reasons, sl, tp).
     """
     last  = df.iloc[-1]
@@ -167,20 +167,20 @@ def score_setup(df, direction, macro_trend=0):
         score += 2
         reasons.append("Fresh bearish OB")
 
-    # ── FAIR VALUE GAP (2 pts) ────────────────────────────────────────────────
+    # ── FAIR VALUE GAP (1 pt) ─────────────────────────────────────────────────
     if direction == 1 and last["fvg_bull"]:
-        score += 2
+        score += 1
         reasons.append("Bullish FVG")
     elif direction == -1 and last["fvg_bear"]:
-        score += 2
+        score += 1
         reasons.append("Bearish FVG")
 
-    # ── UT BOT (2 pts) ────────────────────────────────────────────────────────
+    # ── UT BOT (1 pt) ─────────────────────────────────────────────────────────
     if direction == 1 and last["ut_buy"]:
-        score += 2
+        score += 1
         reasons.append("UT Bot BUY")
     elif direction == -1 and last["ut_sell"]:
-        score += 2
+        score += 1
         reasons.append("UT Bot SELL")
 
     # ── TRENDLINE BREAK (1 pt) ────────────────────────────────────────────────
