@@ -167,12 +167,12 @@ def score_setup(df, direction, macro_trend=0):
         score += 2
         reasons.append("Fresh bearish OB")
 
-    # ── FAIR VALUE GAP (1 pt) ─────────────────────────────────────────────────
+    # ── FAIR VALUE GAP (+1 long / -1 short) ──────────────────────────────────────
     if direction == 1 and last["fvg_bull"]:
         score += 1
         reasons.append("Bullish FVG")
     elif direction == -1 and last["fvg_bear"]:
-        score += 1
+        score -= 1
         reasons.append("Bearish FVG")
 
     # ── UT BOT (1 pt) ─────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-06-10",
+  "last_updated": "2026-06-11",
   "updated_by": "auto-nightly",
   "min_score": 9,
   "max_trades": 1,
@@ -34,13 +34,14 @@
     "macro_4h_against": -1,
     "market_structure": 1,
     "order_block": 2,
-    "fvg": 1,
     "ut_bot": 1,
     "trendline_break": 1,
     "rsi_extreme": 2,
     "rsi_healthy": 1,
-    "volume_spike": 1
+    "volume_spike": 1,
+    "fvg_bull_long": 1,
+    "fvg_bear_short": -1
   },
-  "notes": "2026-06-10 NIGHTLY:\nMIN_SCORE 9->8 (BUG FIX): 2026-06-09 session wrote intent in notes but config value stayed 9. apply_config_to_trader() read stale 9, wrote 9 back to trader.py. Bot ran full session at wrong threshold. Confirmed: log shows Min score 9/13 at 23:05 restart. Score-8 EV=+31.8% (50% WR, 4 trades) vs Score-9 EV=+10.2% (21% WR, 14 trades). 3x better EV.\nATOM WATCH: 3 trades, 0% WR, avg -10.6%. Formal removal at 5 trades negative EV. Currently 3/5. Remove if 2 more losses.\nRUNE KEEP: 5 trades, WR 20%, +3.3% avg. Trail saving it. Keep.\nTRAIL_PCT=8% KEPT: Avg winner 8.5h -- trail is primary alpha. Not touching.\nNO TRADES TODAY: Market ranging, ADX 11-29 all coins. Bot correctly idle.\n\n2026-06-07 NIGHTLY:\nMIN_SCORE 7->8: Recent score-7 trades (id11 SUI -32.3%, id27 ETH -27.1%, id15/16 SUI near-flat) avg -14.4%. Score-8 EV=+44% (67% WR). Removing score-7 threshold removes marginal setups missing OB/UT Bot confirmation.\nkPEPE REMOVED: 4 trades, 0% WR, -12.2% avg, all SL hits. ADX=82 (highest in list) yet stopped out by noise every time. SL at 2% too tight for token volatility. Total drag: -48.9%.\nTRAIL_PCT=8% KEPT: Caught SUI +83.4%, WLD +132.9%, ATOM +27.4%. Alpha generator of the system.\nMIN_ADX=30 KEPT: Losses occur at high ADX too (ARB 62 -22.8%, ATOM 57 -29.0%) -- ADX above 30 is necessary but not sufficient.\nMAX_TRADES=2 KEPT: Max drawdown -75.6% already significant. Need more data for 3 concurrent.\nBUG: SIGTERM handler missing in live.py -- orphan PID recurs every nightly session. Fix pending approval.\n\n2026-06-09 NIGHTLY:\nMIN_SCORE 9->8: Score-8 EV=+31.8% (4 trades, WR 50%) vs Score-9 EV=+10.2% (14 trades, WR 21%). Score-9 is 3x worse EV. With MIN_SCORE=9, bot took 0 new trades on 2026-06-08 full session. Reverting to 8.\nFVG weight 2->1: 'bearish' (Bearish FVG) factor has WR 12% (2W/15L) -- inversely predictive for SHORT entries. FVGs are price magnets; bearish FVG below entry attracts price UP into the gap (against short). Weight halved to reduce its dominance.\nUT Bot weight 2->1: 'ut' factor WR 0% (0W/3L). UT Bot on 1H is a lagging confirmation -- fires after the move starts, producing chased entries. Sample small (3 trades) but direction is clear. Keep at 1 (not 0) until more data.\nTRAIL_PCT=8% KEPT: Avg winning trade 8.5h -- trail is primary alpha generator. \nSIGTERM fix applied to live.py: lambda sigterm -> sys.exit(0) after atexit.register. Prevents recurring orphan PID on systemd stop.",
+  "notes": "2026-06-11 NIGHTLY:\nMIN_SCORE 9->8 (RECURRING BUG): Config and trader.py both showed 9 for the 3rd time. Root cause: apply_config_to_trader() re-reads config before writing trader.py \u2014 if save_config() wasn't called in prior session, it propagates 9 again. Fixed this session explicitly in BOTH files.\nBEARISH FVG INVERTED (-1 for SHORTs): Most significant change this session. Evidence: 18 short trades with Bearish FVG \u2192 WR 11% (2W/16L). 11 shorts WITHOUT Bearish FVG \u2192 WR 45% (5W/6L). 34 percentage point difference at n=18 is statistically significant. Theory: Bearish FVGs attract price back INTO the gap (upward), fighting short positions. Changed from +1 to -1 in trader.py. Signal weights split: fvg_bull_long=+1, fvg_bear_short=-1.\nATOM: 3/5 toward removal (5 trades, 0% WR, negative avg PnL required). Still watching.\nRUNE: 5 trades, WR 20%, +3.3% avg via trail. Marginal. Keep watching.\nTRAIL_PCT=8% KEPT: Avg win 8.5h. Trail IS the alpha.\nMAX_TRADES=1 KEPT: DD -78.2%, do not increase risk.\nNO CHANGE: ut_bot(1), trendline(1), min_adx(30), session, watchlist.",
   "suspended_coins": {}
 }
