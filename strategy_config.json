@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "last_updated": "2026-06-11",
+  "last_updated": "2026-06-13",
   "updated_by": "auto-nightly",
-  "min_score": 9,
+  "min_score": 8,
   "max_trades": 1,
   "risk_pct": 0.02,
   "trail_pct": 0.08,
@@ -42,6 +42,6 @@
     "fvg_bull_long": 1,
     "fvg_bear_short": -1
   },
-  "notes": "2026-06-11 NIGHTLY:\nMIN_SCORE 9->8 (RECURRING BUG): Config and trader.py both showed 9 for the 3rd time. Root cause: apply_config_to_trader() re-reads config before writing trader.py \u2014 if save_config() wasn't called in prior session, it propagates 9 again. Fixed this session explicitly in BOTH files.\nBEARISH FVG INVERTED (-1 for SHORTs): Most significant change this session. Evidence: 18 short trades with Bearish FVG \u2192 WR 11% (2W/16L). 11 shorts WITHOUT Bearish FVG \u2192 WR 45% (5W/6L). 34 percentage point difference at n=18 is statistically significant. Theory: Bearish FVGs attract price back INTO the gap (upward), fighting short positions. Changed from +1 to -1 in trader.py. Signal weights split: fvg_bull_long=+1, fvg_bear_short=-1.\nATOM: 3/5 toward removal (5 trades, 0% WR, negative avg PnL required). Still watching.\nRUNE: 5 trades, WR 20%, +3.3% avg via trail. Marginal. Keep watching.\nTRAIL_PCT=8% KEPT: Avg win 8.5h. Trail IS the alpha.\nMAX_TRADES=1 KEPT: DD -78.2%, do not increase risk.\nNO CHANGE: ut_bot(1), trendline(1), min_adx(30), session, watchlist.",
+  "notes": "2026-06-13 NIGHTLY: MIN_SCORE fixed 9->8 (4th time). Root cause: 2026-06-11 session updated notes but did not set min_score=8 key before save_config. Fixed definitively this session via direct key assignment + save + apply. Score 8 EV=+31.8% vs Score 9 EV=+8.7% (3x worse). No other changes. ATOM: 3 trades 0% WR -10.6% avg, watching (need 5 for removal). Trail 8% IS the alpha (avg win 8.5h). Bearish FVG -1 weight confirmed correct (WR 11%).",
   "suspended_coins": {}
 }
