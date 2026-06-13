@@ -4,6 +4,18 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.2.0 — 2026-06-13
+
+**Stats:** 33 trades · WR: 31% · P&L: +343.6%
+
+**Parameter changes (1):**
+- MIN_SCORE 8→9  (WR=31% < 50% on 26 trades)
+
+**Code improvements (1):**
+- trader.py: With 8 consecutive losses and -78.2% drawdown the bot needs a circuit-breaker. This reads the last 8 closed trades from state.json once per candle (hourly, negligible I/O) and raises the required score by +1 when 4+ are losses and +2 when 6+. At the current 8/8 loss streak it requires score≥11 to fire, cutting out marginal 9-10 point setups until the market regime proves itself. The bump self-heals automatically as winning trades accumulate — no manual reset needed.
+
+---
+
 ## v1.1.3 — 2026-06-11
 
 **Stats:** 33 trades · WR: 31% · P&L: +343.6%

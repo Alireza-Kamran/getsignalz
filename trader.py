@@ -10,11 +10,24 @@ from indicators import (fetch_candles, rsi, atr, adx, ut_bot, ssl_channel,
 
 # ── Coins to monitor ──────────────────────────────────────────────────────────
 WATCHLIST = [
-    "ETH", "WLD", "ARB", "SUI", "SOL", "INJ", "AAVE", "AVAX", "ATOM", "OP", "RUNE", "BNB", "APT", "DOGE"
+    "ETH",
+    "WLD",
+    "ARB",
+    "SUI",
+    "SOL",
+    "INJ",
+    "AAVE",
+    "AVAX",
+    "ATOM",
+    "OP",
+    "RUNE",
+    "BNB",
+    "APT",
+    "DOGE"
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
-MIN_SCORE   = 8       # minimum confluence to open a trade
+MIN_SCORE   = 9       # minimum confluence to open a trade
 MIN_ADX     = 30
 TP_RATIO    = 2.0     # risk:reward
 RISK_PCT    = 0.02    # 3% account risk per trade
@@ -253,8 +266,23 @@ def find_best_setup(open_positions, hour_utc=None):
     if hour_utc is not None and not in_session(hour_utc):
         return None
 
+    # Raise score bar during losing streaks — only the strongest setups fire when in drawdown
+    _score_bump = 0
+    try:
+        import json as _json, os as _os
+        _sf = "/root/trade/state.json"
+        if _os.path.exists(_sf):
+            with open(_sf) as _f:
+                _recent = _json.load(_f).get("closed_trades", [])[-8:]
+            _n_loss = sum(1 for t in _recent if (t.get("lev_pct") or 0) < 0)
+            if _n_loss >= 6:
+                _score_bump = 2
+            elif _n_loss >= 4:
+                _score_bump = 1
+    except Exception:
+        pass
     best = None
-    best_score = MIN_SCORE - 1
+    best_score = MIN_SCORE + _score_bump - 1
 
     for coin in WATCHLIST:
         if coin in open_positions:
