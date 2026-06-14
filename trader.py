@@ -27,7 +27,7 @@ WATCHLIST = [
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
-MIN_SCORE   = 9       # minimum confluence to open a trade
+MIN_SCORE   = 10       # minimum confluence to open a trade
 MIN_ADX     = 30
 TP_RATIO    = 2.0     # risk:reward
 RISK_PCT    = 0.02    # 3% account risk per trade
