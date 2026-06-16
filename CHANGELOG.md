@@ -2,6 +2,13 @@
 
 All nightly improvements are logged here automatically.
 
+## v1.2.3 — 2026-06-16
+
+**Stats:** 33 trades · WR: 32% · P&L: +339.7%
+
+**Critical fix (1):**
+- MIN_SCORE 10->8. Root cause: a flawed nightly heuristic (global WR<50% -> bump MIN_SCORE) had ratcheted the threshold up for 6 straight sessions (8->9->9->9->9->10->10), directly contradicting the per-score EV table that every session recomputed and confirmed: score 8 EV +31.8% vs score 9 +8.7% vs score 10 +4.6% (3-7x worse). Combined with the live.py losing-streak circuit breaker (+2 active), effective MIN_SCORE had reached ~12/13, explaining zero new trades for several days despite daily ADX>30 conditions. Reverted to the evidence-backed value. New rule: MIN_SCORE changes must be justified by the per-score EV table, never by overall win rate alone.
+
 ---
 
 ## v1.2.2 — 2026-06-15

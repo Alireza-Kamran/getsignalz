@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "last_updated": "2026-06-15",
+  "last_updated": "2026-06-16",
   "updated_by": "auto-nightly",
-  "min_score": 10,
+  "min_score": 8,
   "max_trades": 1,
   "risk_pct": 0.02,
   "trail_pct": 0.08,
@@ -42,6 +42,6 @@
     "fvg_bull_long": 1,
     "fvg_bear_short": -1
   },
-  "notes": "2026-06-13 NIGHTLY: MIN_SCORE fixed 9->8 (4th time). Root cause: 2026-06-11 session updated notes but did not set min_score=8 key before save_config. Fixed definitively this session via direct key assignment + save + apply. Score 8 EV=+31.8% vs Score 9 EV=+8.7% (3x worse). No other changes. ATOM: 3 trades 0% WR -10.6% avg, watching (need 5 for removal). Trail 8% IS the alpha (avg win 8.5h). Bearish FVG -1 weight confirmed correct (WR 11%).",
+  "notes": "2026-06-16 NIGHTLY: ROOT CAUSE FOUND for week-long trade drought. A flawed nightly heuristic (global WR=31% < 50% on N trades -> bump MIN_SCORE) ratcheted min_score 8->9->9->9->9->10->10 over the past 6 sessions, overriding the repeatedly-validated per-score EV analysis (score 8 EV +31.8%/trade vs score 9 +8.7% vs score 10 +4.6% -- 3-7x worse). Global WR is the wrong metric to gate on: it mixes all score bands and is dominated by the worst ones once the threshold drifts up. Combined with the live.py circuit-breaker (+2 after 6/8 recent losses, currently active), effective MIN_SCORE hit ~12/13, explaining zero trades for several days despite ADX>30 conditions occurring daily. FIX APPLIED: min_score reverted to 8 (decisive, repeated evidence across 6 prior sessions). RULE FOR FUTURE SESSIONS: never raise min_score based on overall win rate alone. Only change it based on the per-score EV table in full_report(). NOT APPLIED: wanted to tighten fvg_bear_short -1 -> -2 (shorts WITH bearish FVG present still WR 21%/3W-11L vs WITHOUT 38%/3W-5L) but the trader.py code edit was blocked by permission denial this session (sandbox/tooling, not a data reason) -- left config and code both at -1 so they stay consistent. Revisit fvg_bear_short=-2 next session if write access to trader.py score_setup() is available.",
   "suspended_coins": {}
 }
