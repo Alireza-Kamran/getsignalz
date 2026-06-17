@@ -172,7 +172,7 @@ def score_setup(df, direction, macro_trend=0):
         score += 1
         reasons.append("Bullish FVG")
     elif direction == -1 and last["fvg_bear"]:
-        score -= 1
+        score -= 2
         reasons.append("Bearish FVG")
 
     # ── UT BOT (1 pt) ─────────────────────────────────────────────────────────
@@ -276,7 +276,7 @@ def find_best_setup(open_positions, hour_utc=None):
                 _recent = _json.load(_f).get("closed_trades", [])[-8:]
             _n_loss = sum(1 for t in _recent if (t.get("lev_pct") or 0) < 0)
             if _n_loss >= 6:
-                _score_bump = 2
+                _score_bump = 1
             elif _n_loss >= 4:
                 _score_bump = 1
     except Exception:
