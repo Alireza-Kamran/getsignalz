@@ -10,11 +10,24 @@ from indicators import (fetch_candles, rsi, atr, adx, ut_bot, ssl_channel,
 
 # ── Coins to monitor ──────────────────────────────────────────────────────────
 WATCHLIST = [
-    "ETH", "WLD", "ARB", "SUI", "SOL", "INJ", "AAVE", "AVAX", "ATOM", "OP", "RUNE", "BNB", "APT", "DOGE"
+    "ETH",
+    "WLD",
+    "ARB",
+    "SUI",
+    "SOL",
+    "INJ",
+    "AAVE",
+    "AVAX",
+    "ATOM",
+    "OP",
+    "RUNE",
+    "BNB",
+    "APT",
+    "DOGE"
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
-MIN_SCORE   = 8       # minimum confluence to open a trade
+MIN_SCORE   = 9       # minimum confluence to open a trade
 MIN_ADX     = 30
 TP_RATIO    = 2.0     # risk:reward
 RISK_PCT    = 0.02    # 3% account risk per trade

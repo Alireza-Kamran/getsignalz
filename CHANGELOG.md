@@ -13,6 +13,15 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.2.8 — 2026-06-19
+
+**Stats:** 33 trades · WR: 31% · P&L: +343.6%
+
+**Parameter changes (1):**
+- MIN_SCORE 8→9  (WR=31% < 50% on 26 trades)
+
+---
+
 
 ## v1.2.3 — 2026-06-16
 
