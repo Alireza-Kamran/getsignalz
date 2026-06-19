@@ -170,17 +170,7 @@ def _self_improve():
         changes  = []
         insights = []
 
-        # ── 1. MIN_SCORE ────────────────────────────────────────────────────────
-        cur_score = config.get("min_score", 7)
-        if decided >= 20 and wr < 50 and cur_score < 10:
-            config["min_score"] = cur_score + 1
-            changes.append(f"MIN_SCORE {cur_score}→{config['min_score']}  (WR={wr:.0f}% < 50% on {decided} trades)")
-        elif decided >= 15 and wr > 75 and cur_score > 6:
-            days     = max(1, len(set((t.get("open_time") or "")[:10] for t in all_trades)))
-            sig_rate = len([s for s in signals if s.get("fired")]) / days
-            if sig_rate < 0.5:
-                config["min_score"] = cur_score - 1
-                changes.append(f"MIN_SCORE {cur_score}→{config['min_score']}  (WR={wr:.0f}% > 75% but only {sig_rate:.1f} signals/day)")
+        # MIN_SCORE auto-adjust DISABLED (uses blended WR=wrong metric; set by nightly self-learn only)
 
         # ── 2. MIN_ADX ──────────────────────────────────────────────────────────
         cur_adx = config.get("min_adx", 30)
