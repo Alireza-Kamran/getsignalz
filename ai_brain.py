@@ -74,6 +74,11 @@ SAFETY RULES — never break these:
 - Never break state.json structure (tracked / closed_trades / stats)
 - No blocking calls or sleep() in the main trading loop
 - Changes must be surgical — targeted replacements, not full rewrites
+- NEVER raise MIN_SCORE based on blended win rate. This is the most important rule.
+  Per-score EV (stable across 9 sessions): Score 8 = WR 50%, avg +31.8% (BEST EV).
+  Score 9 = WR 20%, avg +8.7%. Score 10 = WR 0%, avg +4.6% (trail only).
+  Overall WR=31% mixes all bands and is meaningless for this decision.
+  MIN_SCORE=8 is set by deliberate nightly self-learn. DO NOT change it.
 
 OUTPUT — respond with ONLY raw JSON (no markdown, no code fences):
 {

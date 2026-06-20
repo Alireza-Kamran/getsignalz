@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from loguru import logger
 
 from trader import (find_best_setup, quick_state, RISK_PCT, MAX_TRADES,
-                    WATCHLIST, MIN_SCORE, TP_RATIO, in_session)
+                    WATCHLIST, MIN_SCORE, TP_RATIO, in_session, SESSION_START, SESSION_END)
 from executor import get_account_value, get_positions, get_mids, open_trade, get_price, update_sl
 from journal import log_signal, log_trade_open, log_trade_close
 from review  import (should_quiet, should_nightly_review, should_weekly_review,
@@ -180,7 +180,7 @@ def run():
     logger.info("="*55)
     logger.info("  GETSIGNALZ AI — ONLINE")
     logger.info(f"  Coins: {len(WATCHLIST)} | TF: {TF} | Min score: {MIN_SCORE}/13")
-    logger.info(f"  Session: 07:00-22:00 UTC | Quiet: 02:00-04:00 UTC")
+    logger.info(f"  Session: {SESSION_START:02d}:00-{SESSION_END:02d}:00 UTC | Quiet: 02:00-04:00 UTC")
     logger.info("="*55)
 
     tracker.start()
