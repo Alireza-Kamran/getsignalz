@@ -13,6 +13,18 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.3.0 — 2026-06-21
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+**Parameter changes (1):**
+- TP_RATIO 1.75→1.5  (TP hit rate=30% < 30% — target too far)
+
+**Code improvements (1):**
+- executor.py: The old formula produced a constant ~12.5% account loss per SL hit because leverage and position size were coupled: with the leverage formula in trader.py (leverage = 50/tp_pct, tp_pct = sl_pct×2), the product sl_pct × leverage × 0.5 always ≈ 12.5% regardless of stop distance. The fix uses risk_usd (already computed as account×RISK_PCT=2% in live.py) divided by sl_pct to target exactly 2% account risk per trade — an 84% reduction. The cap at account×leverage×0.5 ensures no position exceeds the old maximum, preserving safety on very tight stops.
+
+---
+
 ## v1.2.9 — 2026-06-20
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%

@@ -131,14 +131,16 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
         logger.error(f"Invalid SL for {coin}: price={price}, sl={sl_price}")
         return None
 
-    # Position size based on leverage × account value
-    # Use HALF the account per trade so the two MAX_TRADES positions can share margin
-    # and a single SL hit costs ~half as much of total equity. The leveraged % shown
-    # everywhere (ROE = price_move/price × leverage) is size-independent, so this does
-    # NOT change any displayed signal/PnL percentage — it only cuts account-level
-    # drawdown. Directly targets the -75.6% max / -43.5% current drawdown.
+    # Risk-based sizing: notional = risk_usd / sl_pct ensures each SL hit costs
+    # exactly RISK_PCT (2%) of account. Old formula (account*leverage*0.5) lost
+    # ~12.5% per SL regardless of stop width — root cause of -81.5% drawdown.
+    # Cap at account*leverage*0.5 preserves the old value as a hard maximum.
     account_val = get_account_value()
-    notional    = account_val * leverage * 0.5
+    risk_pct_sl = abs(price - sl_price) / price
+    if risk_pct_sl > 0:
+        notional = min(risk_usd / risk_pct_sl, account_val * leverage * 0.5)
+    else:
+        notional = account_val * leverage * 0.1
     sz = _round_sz(notional / price, coin=coin)
 
     # Minimum $10 notional

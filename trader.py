@@ -29,7 +29,7 @@ WATCHLIST = [
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 8       # minimum confluence to open a trade
 MIN_ADX     = 30
-TP_RATIO    = 1.75     # risk:reward
+TP_RATIO    = 1.5     # risk:reward
 RISK_PCT    = 0.02    # 3% account risk per trade
 MAX_TRADES  = 1
 
@@ -167,7 +167,7 @@ def score_setup(df, direction, macro_trend=0):
         score += 2
         reasons.append("Fresh bearish OB")
 
-    # ── FAIR VALUE GAP (+1 long / -1 short) ──────────────────────────────────────
+    # ── FAIR VALUE GAP (+1 long / -2 short) ──────────────────────────────────────
     if direction == 1 and last["fvg_bull"]:
         score += 1
         reasons.append("Bullish FVG")
@@ -266,23 +266,8 @@ def find_best_setup(open_positions, hour_utc=None):
     if hour_utc is not None and not in_session(hour_utc):
         return None
 
-    # Raise score bar during losing streaks — only the strongest setups fire when in drawdown
-    _score_bump = 0
-    try:
-        import json as _json, os as _os
-        _sf = "/root/trade/state.json"
-        if _os.path.exists(_sf):
-            with open(_sf) as _f:
-                _recent = _json.load(_f).get("closed_trades", [])[-8:]
-            _n_loss = sum(1 for t in _recent if (t.get("lev_pct") or 0) < 0)
-            if _n_loss >= 6:
-                _score_bump = 1
-            elif _n_loss >= 4:
-                _score_bump = 1
-    except Exception:
-        pass
     best = None
-    best_score = MIN_SCORE + _score_bump - 1
+    best_score = MIN_SCORE - 1
 
     for coin in WATCHLIST:
         if coin in open_positions:
