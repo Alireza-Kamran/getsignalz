@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-06-21",
+  "last_updated": "2026-06-22",
   "updated_by": "auto-nightly",
   "min_score": 8,
   "max_trades": 1,
@@ -34,14 +34,14 @@
     "macro_4h_against": -1,
     "market_structure": 1,
     "order_block": 2,
-    "ut_bot": 1,
-    "trendline_break": 1,
+    "ut_bot": 0,
+    "trendline_break": 0,
     "rsi_extreme": 2,
     "rsi_healthy": 1,
     "volume_spike": 1,
     "fvg_bull_long": 1,
     "fvg_bear_short": -2
   },
-  "notes": "2026-06-21 NIGHTLY: CIRCUIT BREAKER REMOVED. Evidence: last 8 trades all losses (n_loss=8) \u2192 circuit breaker permanently locked at +1 \u2192 forced effective MIN=9. Score-9 EV=+7.2% vs Score-8 EV=+31.8% (3.4x worse). Circuit breaker was making losing streak WORSE by blocking best setups. Real risk control = 2% RISK_PCT + MAX_TRADES=1 (unchanged). RULES: NEVER change MIN_SCORE based on blended WR. Per-score EV: Score 8 = WR 50%, +31.8% avg (BEST). Score 9 = WR 19%, +7.2%. Score 10 = WR 0%, +4.6% (trail-only). MIN_SCORE=8 is the validated threshold.",
+  "notes": "2026-06-22 NIGHTLY: REMOVED UT BOT and TRENDLINE from scoring. Evidence: ut 0W/3L (0% WR), trendline 0W/2L (0% WR) across all sessions \u2014 both lagging on 1H. Max score 13\u219211. MIN_SCORE=8 (best EV: WR 50%, +31.8% avg vs score-9 WR 19%, +7.2%). RULES: NEVER raise MIN_SCORE on blended WR. Circuit breaker permanently removed (2026-06-21). Trail 8% is alpha generator (avg win 8.5h vs loss 3.4h). Overall EV: +9.6% avg/trade.",
   "suspended_coins": {}
 }

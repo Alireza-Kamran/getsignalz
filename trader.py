@@ -114,7 +114,7 @@ def is_trending(df) -> bool:
 
 def score_setup(df, direction, macro_trend=0):
     """
-    Score a potential trade 0-13. Only trade >= MIN_SCORE.
+    Score a potential trade 0-11. Only trade >= MIN_SCORE.
     Returns (score, reasons, sl, tp).
     """
     last  = df.iloc[-1]
@@ -175,21 +175,9 @@ def score_setup(df, direction, macro_trend=0):
         score -= 2
         reasons.append("Bearish FVG")
 
-    # ── UT BOT (1 pt) ─────────────────────────────────────────────────────────
-    if direction == 1 and last["ut_buy"]:
-        score += 1
-        reasons.append("UT Bot BUY")
-    elif direction == -1 and last["ut_sell"]:
-        score += 1
-        reasons.append("UT Bot SELL")
+    # UT Bot removed: 0W/3L on 1H — lagging signal, no predictive value
 
-    # ── TRENDLINE BREAK (1 pt) ────────────────────────────────────────────────
-    if direction == 1 and last["tl_bull"]:
-        score += 1
-        reasons.append("Trendline broken up")
-    elif direction == -1 and last["tl_bear"]:
-        score += 1
-        reasons.append("Trendline broken down")
+    # Trendline break removed: 0W/2L on 1H — too slow for 1H scalping
 
     # ── RSI CONTEXT (0-2 pts) ─────────────────────────────────────────────────
     if direction == 1:
