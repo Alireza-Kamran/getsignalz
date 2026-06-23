@@ -128,8 +128,7 @@ def score_setup(df, direction, macro_trend=0):
     if direction == 1 and ssl != 1:   return 0, [], None, None
     if direction == -1 and ssl != -1: return 0, [], None, None
     if direction == 1 and r >= 68:    return 0, [], None, None  # overbought = bad long
-    if direction == -1 and r <= 25:                          return 0, [], None, None  # ultra-oversold = exhausted move, poor short entry
-    if direction == -1 and r <= 32 and last["adx"] <= 40:   return 0, [], None, None
+    if direction == -1 and r <= 35:   return 0, [], None, None  # oversold regardless of ADX: RSI must recover above 35 before shorting to avoid bounce-stop
     if not is_trending(df):           return 0, [], None, None  # ranging market = skip
 
     # ── SSL TREND (2 pts) ─────────────────────────────────────────────────────

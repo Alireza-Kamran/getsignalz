@@ -13,6 +13,16 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.4.0 — 2026-06-23
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+**Code improvements (2):**
+- trader.py: Merges the two separate short RSI gates (25 unconditional, 32 with ADX≤40) into a single cleaner threshold of 35 with no ADX exception. The ADX exception was the loophole: high-ADX oversold shorts (ARB RSI=29 ADX=55, kPEPE RSI=32 ADX=79, AVAX RSI=34 ADX=34) are consistently the worst performers — strong trends produce the largest counter-bounces when RSI is already deeply depressed. All profitable shorts had RSI ≥50. Raising the floor to 35 blocks the losing class without touching any winner.
+- tg.py: UT Bot (weight 0) and trendline break (weight 0) were removed from scoring last session, dropping the maximum achievable score from 14 to 11. The signal card still displayed /14, making a score of 9 look weaker than it is (64% of max vs the true 82%). The logger in live.py already shows /11 correctly; this syncs the public Telegram post.
+
+---
+
 ## v1.3.1 — 2026-06-22
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%
