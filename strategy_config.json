@@ -6,7 +6,7 @@
   "max_trades": 1,
   "risk_pct": 0.01,
   "trail_pct": 0.08,
-  "tp_ratio": 2.0,
+  "tp_ratio": 1.75,
   "session_start_utc": 11,
   "session_end_utc": 23,
   "min_adx": 30,

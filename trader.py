@@ -10,13 +10,26 @@ from indicators import (fetch_candles, rsi, atr, adx, ssl_channel,
 
 # ── Coins to monitor ──────────────────────────────────────────────────────────
 WATCHLIST = [
-    "ETH", "WLD", "ARB", "SUI", "SOL", "INJ", "AAVE", "AVAX", "ATOM", "OP", "RUNE", "BNB", "APT", "DOGE"
+    "ETH",
+    "WLD",
+    "ARB",
+    "SUI",
+    "SOL",
+    "INJ",
+    "AAVE",
+    "AVAX",
+    "ATOM",
+    "OP",
+    "RUNE",
+    "BNB",
+    "APT",
+    "DOGE"
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 6       # minimum confluence (max 8)
 MIN_ADX     = 30
-TP_RATIO    = 2.0
+TP_RATIO    = 1.75
 RISK_PCT    = 0.01
 MAX_TRADES  = 1
 
@@ -137,6 +150,13 @@ def score_setup(df, direction, macro_trend=0):
     if direction == 1 and willr > -20 and willr_ema > -20:
         return 0, [], None, None, None, None, None
     if direction == -1 and willr < -80 and willr_ema < -80:
+        return 0, [], None, None, None, None, None
+    # RSI extremes: entering a short when RSI < 25 means price has already fallen hard;
+    # mean-reversion risk dominates and these entries have shown immediate SL hits.
+    rsi_val = float(last["rsi"])
+    if direction == -1 and rsi_val < 25:
+        return 0, [], None, None, None, None, None
+    if direction == 1 and rsi_val > 75:
         return 0, [], None, None, None, None, None
     # Minimum trend filter
     if float(last["adx"]) < 20:

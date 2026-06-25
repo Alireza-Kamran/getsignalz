@@ -13,6 +13,18 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.5.0 — 2026-06-25
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+**Parameter changes (1):**
+- TP_RATIO 2.0→1.75  (TP hit rate=30% < 30% — target too far)
+
+**Code improvements (1):**
+- trader.py: Recent losses are concentrated at extreme RSI: RUNE shorted at RSI 17 and RSI 20 (five consecutive hours), SOL at RSI 24, ARB at RSI 29 — all immediate SL hits as price bounced from oversold exhaustion. Williams %R at -80 did not catch these because it can diverge from RSI in strongly trending but exhausted price action. Rejecting shorts when RSI < 25 removes the highest-reversal-risk entries without materially reducing signal frequency on the current watchlist.
+
+---
+
 ## v1.4.0 — 2026-06-23
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%
