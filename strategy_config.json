@@ -4,9 +4,9 @@
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
-  "risk_pct": 0.02,
+  "risk_pct": 0.01,
   "trail_pct": 0.08,
-  "tp_ratio": 1.5,
+  "tp_ratio": 2.0,
   "session_start_utc": 11,
   "session_end_utc": 23,
   "min_adx": 30,
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-06-25 REBUILD: Replaced all scoring with CM Sling Shot System (EMA 38/62 cloud). Entry: conservative (EMA cross back, +2) or aggressive (EMA pullback, +1). Hard gates: cloud dir + SSL + EMA200 + entry signal + Williams %R not exhausted + ADX>20. Max score 8. MIN_SCORE 6. Multi-TF scan: 4h/1h/15m. Macro trend now uses 4H cloud direction. Previous: 2026-06-25 NIGHTLY: volume spike removed. 2026-06-24: market_structure removed.",
+  "notes": "2026-06-25 DD REDUCTION: RISK_PCT 2%->1% (halves per-trade account loss), TP_RATIO 1.5->2.0 (enforces 1:2 RR minimum). MAX_LEV_LOSS stays at 25% (both trader.py and executor.py). Previous: CM Sling Shot rebuild (EMA 38/62 cloud).",
   "suspended_coins": {}
 }

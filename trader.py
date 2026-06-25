@@ -16,8 +16,8 @@ WATCHLIST = [
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 6       # minimum confluence (max 8)
 MIN_ADX     = 30
-TP_RATIO    = 1.5
-RISK_PCT    = 0.02
+TP_RATIO    = 2.0
+RISK_PCT    = 0.01
 MAX_TRADES  = 1
 
 # ── Session: London + NY only (11:00 - 23:00 UTC) ────────────────────────────
