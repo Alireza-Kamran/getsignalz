@@ -77,7 +77,7 @@ def send_signal(coin, direction, score, price, sl, tp, reasons,
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📍 <b>⏳ WAITING FOR ENTRY</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Score: {score}/11  ·  {tf}  ·  <b>{leverage}x</b>\n"
+        f"📊 Score: {score}/8  ·  {tf}  ·  <b>{leverage}x</b>\n"
         f"💰 Entry:  <code>${price:.5g}</code>\n"
         f"🛑 SL:     <code>${sl:.5g}</code>  →  <b>-{lev_loss:.1f}%</b>\n"
         f"🎯 TP:     <code>${tp:.5g}</code>  →  <b>+{lev_gain:.1f}%</b>\n"

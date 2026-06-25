@@ -165,3 +165,32 @@ def atr_rsi_sl(open_, high, low, close, atr_len=6, rsi_len=13):
     mul[(r >= 30) & (r < 50)]  = 1.4 - 0.0466 * (50 - r[(r >= 30) & (r < 50)])
     mul[(r >= 50) & (r <= 70)] = 1.0 + 0.0466 * (r[(r >= 50) & (r <= 70)] - 50)
     return open_ - a * mul, open_ + a * mul, a, r
+
+
+def sling_shot(close, fast=38, slow=62):
+    """CM Sling Shot System — EMA cloud (38/62) with pullback/conservative entry signals."""
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    cloud_bull = ema_fast > ema_slow
+    cloud_bear = ema_fast < ema_slow
+    # Aggressive entry: price pulled back into/below fast EMA while cloud is directional
+    pb_long  = cloud_bull & (close < ema_fast)
+    pb_short = cloud_bear & (close > ema_fast)
+    # Conservative entry: price crosses back through fast EMA after pullback
+    en_long  = cloud_bull & (close > ema_fast) & (close.shift(1) <= ema_fast.shift(1))
+    en_short = cloud_bear & (close < ema_fast) & (close.shift(1) >= ema_fast.shift(1))
+    return ema_fast, ema_slow, cloud_bull, cloud_bear, pb_long, pb_short, en_long, en_short
+
+
+def williams_r(high, low, close, length=21, ema_len=13):
+    """Williams %R oscillator with EMA smoothing. Range: -100 (oversold) to 0 (overbought)."""
+    upper     = high.rolling(length).max()
+    lower     = low.rolling(length).min()
+    willr     = 100 * (close - upper) / (upper - lower).replace(0, np.nan)
+    willr_ema = willr.ewm(span=ema_len, adjust=False).mean()
+    return willr, willr_ema
+
+
+def ema_line(close, length=200):
+    """Simple EMA. Used as the EMA 200 trend filter."""
+    return close.ewm(span=length, adjust=False).mean()

@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "last_updated": "2026-06-23",
+  "last_updated": "2026-06-25",
   "updated_by": "auto-nightly",
-  "min_score": 8,
+  "min_score": 6,
   "max_trades": 1,
   "risk_pct": 0.02,
   "trail_pct": 0.08,
@@ -27,21 +27,16 @@
     "DOGE"
   ],
   "signal_weights": {
-    "ssl_confirmed": 2,
-    "ssl_strong_trend": 1,
+    "ema_cloud": 2,
+    "entry_conservative": 2,
+    "entry_aggressive": 1,
     "macro_4h_aligned": 2,
     "macro_4h_neutral": 1,
     "macro_4h_against": -1,
-    "market_structure": 1,
-    "order_block": 2,
-    "ut_bot": 0,
-    "trendline_break": 0,
-    "rsi_extreme": 2,
-    "rsi_healthy": 1,
-    "volume_spike": 1,
-    "fvg_bull_long": 1,
-    "fvg_bear_short": -2
+    "adx_strong": 1,
+    "cloud_wide": 1,
+    "willr_exhausted": -99
   },
-  "notes": "2026-06-22 NIGHTLY: REMOVED UT BOT and TRENDLINE from scoring. Evidence: ut 0W/3L (0% WR), trendline 0W/2L (0% WR) across all sessions \u2014 both lagging on 1H. Max score 13\u219211. MIN_SCORE=8 (best EV: WR 50%, +31.8% avg vs score-9 WR 19%, +7.2%). RULES: NEVER raise MIN_SCORE on blended WR. Circuit breaker permanently removed (2026-06-21). Trail 8% is alpha generator (avg win 8.5h vs loss 3.4h). Overall EV: +9.6% avg/trade.",
+  "notes": "2026-06-25 REBUILD: Replaced all scoring with CM Sling Shot System (EMA 38/62 cloud). Entry: conservative (EMA cross back, +2) or aggressive (EMA pullback, +1). Hard gates: cloud dir + SSL + EMA200 + entry signal + Williams %R not exhausted + ADX>20. Max score 8. MIN_SCORE 6. Multi-TF scan: 4h/1h/15m. Macro trend now uses 4H cloud direction. Previous: 2026-06-25 NIGHTLY: volume spike removed. 2026-06-24: market_structure removed.",
   "suspended_coins": {}
 }

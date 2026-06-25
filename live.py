@@ -118,7 +118,7 @@ def _post_scan(states, account_val, positions, hour_utc):
         if s is None: continue
         ssl_e  = "🟢" if s["ssl"]==1 else ("🔴" if s["ssl"]==-1 else "⚪️")
         macro_e = "↑" if s["macro"]==1 else ("↓" if s["macro"]==-1 else "→")
-        sig    = f"  🔔<b>{s['best_score']}/11</b>" if s["best_score"] >= MIN_SCORE else ""
+        sig    = f"  🔔<b>{s['best_score']}/8</b>" if s["best_score"] >= MIN_SCORE else ""
         lines.append(
             f"{ssl_e} <b>{s['coin']}</b> ${s['price']:.4f}  "
             f"RSI {s['rsi']:.0f}  ADX {s['adx']:.0f}  {macro_e}{sig}"
@@ -179,7 +179,7 @@ def run():
 
     logger.info("="*55)
     logger.info("  GETSIGNALZ AI — ONLINE")
-    logger.info(f"  Coins: {len(WATCHLIST)} | TF: {TF} | Min score: {MIN_SCORE}/11")
+    logger.info(f"  Coins: {len(WATCHLIST)} | TFs: 15m/1h/4h | Min score: {MIN_SCORE}/8")
     logger.info(f"  Session: {SESSION_START:02d}:00-{SESSION_END:02d}:00 UTC | Quiet: 02:00-04:00 UTC")
     logger.info("="*55)
 
@@ -300,7 +300,7 @@ def run():
                 s = quick_state(coin, TF)
                 if s:
                     states.append(s)
-                    sig = f"  ◄ SIGNAL {s['best_score']}/11" if s["best_score"] >= MIN_SCORE else ""
+                    sig = f"  ◄ SIGNAL {s['best_score']}/8" if s["best_score"] >= MIN_SCORE else ""
                     logger.info(f"{coin:<6} ${s['price']:.4f}  RSI {s['rsi']:.0f}  "
                                 f"ADX {s['adx']:.0f}  SSL {s['ssl']:+d}{sig}")
             # Scan summary stays in logs only — no channel post
@@ -323,12 +323,12 @@ def run():
                 if best:
                     logger.info(
                         f"SIGNAL {best['coin']} {'LONG' if best['direction']==1 else 'SHORT'} "
-                        f"score={best['score']}/11"
+                        f"score={best['score']}/8 {best.get('tf', '1h')}"
                     )
                     risk_usd = account_val * RISK_PCT
 
                     log_signal(best["coin"], best["direction"], best["score"],
-                               best["reasons"], best["price"], best["sl"], best["tp"], TF,
+                               best["reasons"], best["price"], best["sl"], best["tp"], best.get("tf", TF),
                                adx=best.get("adx"), rsi=best.get("rsi"),
                                ssl=best.get("macro"), session_hour=h)
 
@@ -340,7 +340,7 @@ def run():
                         sl=best["sl"], tp=best["tp"],
                         reasons=best["reasons"],
                         account_val=account_val, risk_usd=risk_usd,
-                        tf=TF, leverage=leverage,
+                        tf=best.get("tf", TF), leverage=leverage,
                     )
                     result = open_trade(
                         coin=best["coin"], direction=best["direction"],
