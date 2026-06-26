@@ -13,6 +13,15 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.5.1 — 2026-06-26
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+**Parameter changes (1):**
+- TP_RATIO 2.0→1.75  (TP hit rate=30% < 30% — target too far)
+
+---
+
 ## v1.5.0 — 2026-06-25
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%

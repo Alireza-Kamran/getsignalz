@@ -29,13 +29,13 @@ WATCHLIST = [
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 6       # minimum confluence (max 8)
 MIN_ADX     = 30
-TP_RATIO    = 1.75
+TP_RATIO    = 1.75     # 1:2 RR minimum — aligns with score_setup qualification logic
 RISK_PCT    = 0.01
 MAX_TRADES  = 1
 
-# ── Session: London + NY only (11:00 - 23:00 UTC) ────────────────────────────
+# ── Session: London + NY close (11:00 - 24:00 UTC) ────────────────────────────
 SESSION_START = 11
-SESSION_END   = 23
+SESSION_END   = 24
 
 
 def in_session(hour_utc: int) -> bool:
