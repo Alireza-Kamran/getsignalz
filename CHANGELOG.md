@@ -13,6 +13,18 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.6.0 — 2026-06-27
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+**Parameter changes (1):**
+- TP_RATIO 2.0→1.75  (TP hit rate=30% < 30% — target too far)
+
+**Code improvements (1):**
+- trader.py: score_setup signals and gates on 2.0× RR; executor was placing actual TP orders at 1.75×, causing every TP hit to earn 14.3% less R than displayed and making breakeven trail fire 0.125R early
+
+---
+
 ## v1.5.1 — 2026-06-26
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%

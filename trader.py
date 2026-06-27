@@ -29,7 +29,7 @@ WATCHLIST = [
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 6       # minimum confluence (max 8)
 MIN_ADX     = 30
-TP_RATIO    = 1.75     # 1:2 RR minimum — aligns with score_setup qualification logic
+TP_RATIO    = 2.0       # 1:2 RR minimum — aligns with score_setup qualification logic
 RISK_PCT    = 0.01
 MAX_TRADES  = 1
 
@@ -159,7 +159,7 @@ def score_setup(df, direction, macro_trend=0):
     if direction == 1 and rsi_val > 75:
         return 0, [], None, None, None, None, None
     # Minimum trend filter
-    if float(last["adx"]) < 20:
+    if float(last["adx"]) < 25:
         return 0, [], None, None, None, None, None
 
     # ── SCORING ───────────────────────────────────────────────────────────────
