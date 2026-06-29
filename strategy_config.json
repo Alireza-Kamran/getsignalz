@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-06-28",
+  "last_updated": "2026-06-29",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-06-28 nightly: tp_ratio config sync 1.75->2.0 (trader.py was already 2.0; executor.py imports from trader.py so execution was correct; config was stale/misleading). No strategy changes: CM Sling Shot has 0 closed trades, cannot make scoring decisions. ATOM SHORT trail working: SL=1.6793 (peak 1.5549) locks +37.2%, 8 trail updates. ETH signals 6-7/8 firing in session but blocked by ATOM (correct MAX_TRADES=1). RUNE ADX 42 SSL-1 not triggering: hard gates filtering correctly. Previous: ADX hard gate 20->25 (2026-06-27), SESSION_END 23->24 (2026-06-26), CM Sling Shot rebuild (2026-06-25).",
+  "notes": "2026-06-29 nightly: TP_RATIO 1.75->2.0 in trader.py (recurring bug \u2014 value kept reverting; executor.py uses TP_RATIO from trader.py directly so actual TP orders were at 1.75x not 2.0x). CM Sling Shot 0 closed trades, no scoring changes. ATOM SHORT open (entry 1.7442, trail SL 1.679292, prices 1.55-1.57, +37.2% locked). AAVE 7/8 all session blocked by ATOM MAX_TRADES=1. RUNE ADX 44-68 RSI 5-22 correctly rejected. Previous: SESSION_END 23->24 (2026-06-26), ADX hard gate 20->25 (2026-06-27), CM Sling Shot rebuild (2026-06-25).",
   "suspended_coins": {}
 }

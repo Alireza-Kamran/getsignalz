@@ -13,6 +13,18 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.7.0 — 2026-06-29
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+**Parameter changes (1):**
+- TP_RATIO 2.0→1.75  (TP hit rate=30% < 30% — target too far)
+
+**Code improvements (1):**
+- trader.py: score_setup() already computes tp_pct using a hard-coded 2.0x SL multiple (raw_tp_pct = sl_pct * 2.0), and live.py's _check_trail() assumes risk = abs(tp-entry)/2.0 for its breakeven/0.5R trail logic. With TP_RATIO=1.75, executor.open_trade() recalculates the live TP at 1.75x instead of 2.0x, mismatching the scored setup and feeding _check_trail() a TP that doesn't match its 2R assumption — shifting the breakeven/0.5R trail triggers off their intended price.
+
+---
+
 ## v1.6.1 — 2026-06-28
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%
