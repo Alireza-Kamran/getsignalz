@@ -13,6 +13,19 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.8.0 — 2026-06-30
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+**Parameter changes (1):**
+- TP_RATIO 1.75→1.5  (TP hit rate=30% < 30% — target too far)
+
+**Code improvements (2):**
+- trader.py: score_setup computed TP at hardcoded 2.0× SL while executor places the real order at TP_RATIO=1.5×. The signal Telegram message advertised a TP that the exchange never targeted, then the live position message showed a different (closer) TP — visibly confusing for channel followers. Aligning to TP_RATIO fixes the discrepancy so signal TP equals actual TP. The leverage formula simplifies to MAX_LEV_LOSS/sl_pct which is mathematically identical to the old 50/tp_pct when tp_pct=sl_pct×2.0, so leverage values are unchanged — only the TP price and displayed R:R become accurate.
+- tracker.py: Telegram returns 429 with a retry_after parameter when edits are too rapid; the trail engine can fire multiple SL updates per minute across positions. Without retry these edits silently fail, leaving the channel message showing a stale SL price even though the exchange order was correctly updated. The fix adds up to 3 retries respecting the server backoff (capped at 10s), runs entirely inside the background tracker thread so sleep() does not touch the main trading loop.
+
+---
+
 ## v1.7.0 — 2026-06-29
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%

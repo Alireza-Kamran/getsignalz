@@ -29,7 +29,7 @@ WATCHLIST = [
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 6       # minimum confluence (max 8)
 MIN_ADX     = 30
-TP_RATIO    = 2.0         # 1:2 RR minimum — aligns with score_setup qualification logic
+TP_RATIO    = 1.5         # 1:2 RR minimum — aligns with score_setup qualification logic
 RISK_PCT    = 0.01
 MAX_TRADES  = 1
 
@@ -233,9 +233,9 @@ def score_setup(df, direction, macro_trend=0):
     MAX_LEV_LOSS = 25.0
     MAX_LEVERAGE = 25.0
 
-    raw_tp_pct = min(max(sl_pct * 2.0, 1.5), 6.0)
+    raw_tp_pct = min(max(sl_pct * TP_RATIO, 1.0), 6.0)
     tp_pct     = raw_tp_pct
-    leverage   = min(round(50.0 / tp_pct, 1), MAX_LEVERAGE)
+    leverage   = min(round(MAX_LEV_LOSS / sl_pct, 1), MAX_LEVERAGE)
 
     if sl_pct * leverage > MAX_LEV_LOSS:
         return 0, [], None, None, None, None, None

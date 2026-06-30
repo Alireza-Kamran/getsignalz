@@ -63,15 +63,29 @@ def _send(text):
 def _edit(msg_id, text):
     if not msg_id:
         return
-    r = requests.post(f"{BASE}/editMessageText", json={
-        "chat_id": CHANNEL, "message_id": msg_id,
-        "text": text, "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }, timeout=10)
-    d = r.json()
-    # "not modified" is not an error — price just hasn't changed
-    if not d.get("ok") and "not modified" not in d.get("description", ""):
-        print(f"[tracker] edit {msg_id} failed: {d.get('description')}")
+    for attempt in range(3):
+        try:
+            r = requests.post(f"{BASE}/editMessageText", json={
+                "chat_id": CHANNEL, "message_id": msg_id,
+                "text": text, "parse_mode": "HTML",
+                "disable_web_page_preview": True
+            }, timeout=10)
+            d = r.json()
+            if d.get("ok"):
+                return
+            if "not modified" in d.get("description", ""):
+                return
+            if d.get("error_code") == 429:
+                retry_after = d.get("parameters", {}).get("retry_after", 5)
+                time.sleep(min(retry_after, 10))
+                continue
+            print(f"[tracker] edit {msg_id} failed: {d.get('description')}")
+            return
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                print(f"[tracker] edit {msg_id} error: {e}")
 
 
 def _pin(msg_id):

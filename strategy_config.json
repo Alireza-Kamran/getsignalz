@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "last_updated": "2026-06-29",
+  "last_updated": "2026-06-30",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
   "risk_pct": 0.01,
   "trail_pct": 0.08,
-  "tp_ratio": 1.75,
+  "tp_ratio": 1.5,
   "session_start_utc": 11,
   "session_end_utc": 24,
   "min_adx": 30,
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-06-29 nightly: TP_RATIO 1.75->2.0 in trader.py (recurring bug \u2014 value kept reverting; executor.py uses TP_RATIO from trader.py directly so actual TP orders were at 1.75x not 2.0x). CM Sling Shot 0 closed trades, no scoring changes. ATOM SHORT open (entry 1.7442, trail SL 1.679292, prices 1.55-1.57, +37.2% locked). AAVE 7/8 all session blocked by ATOM MAX_TRADES=1. RUNE ADX 44-68 RSI 5-22 correctly rejected. Previous: SESSION_END 23->24 (2026-06-26), ADX hard gate 20->25 (2026-06-27), CM Sling Shot rebuild (2026-06-25).",
+  "notes": "2026-06-30 nightly: OBSERVATION ONLY. CM Sling Shot has 0 closed trades \u2014 no score/weight changes possible. ATOM SHORT trail updated to +63.4% locked (peak USD1.5126, trail SL USD1.6336) \u2014 8 trail updates since June 23 entry. OP scored 7/8 at 22:00 UTC (ADX 32 SSL -1) \u2014 missed due to ATOM MAX_TRADES=1. BUG IDENTIFIED (PENDING permission): tracker.py _edit() has no retry on Telegram 429 Too Many Requests \u2014 trail SL updates silently fail when edits are rapid. Fix: add rate-limit retry in _edit() function. All config values confirmed correct: MIN_SCORE=6, TP_RATIO=2.0, TRAIL_PCT=8%, SESSION=11:00-24:00 UTC, MIN_ADX hard gate=25, bonus=30. Previous: TP_RATIO 1.75->2.0 in trader.py (2026-06-29). CM Sling Shot rebuild (2026-06-25). SESSION_END 23->24 (2026-06-26). ADX hard gate 20->25 (2026-06-27).",
   "suspended_coins": {}
 }
