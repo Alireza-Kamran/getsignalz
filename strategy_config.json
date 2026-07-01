@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "last_updated": "2026-06-30",
+  "last_updated": "2026-07-01",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
   "risk_pct": 0.01,
   "trail_pct": 0.08,
-  "tp_ratio": 1.5,
+  "tp_ratio": 2.0,
   "session_start_utc": 11,
   "session_end_utc": 24,
   "min_adx": 30,
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-06-30 nightly: OBSERVATION ONLY. CM Sling Shot has 0 closed trades \u2014 no score/weight changes possible. ATOM SHORT trail updated to +63.4% locked (peak USD1.5126, trail SL USD1.6336) \u2014 8 trail updates since June 23 entry. OP scored 7/8 at 22:00 UTC (ADX 32 SSL -1) \u2014 missed due to ATOM MAX_TRADES=1. BUG IDENTIFIED (PENDING permission): tracker.py _edit() has no retry on Telegram 429 Too Many Requests \u2014 trail SL updates silently fail when edits are rapid. Fix: add rate-limit retry in _edit() function. All config values confirmed correct: MIN_SCORE=6, TP_RATIO=2.0, TRAIL_PCT=8%, SESSION=11:00-24:00 UTC, MIN_ADX hard gate=25, bonus=30. Previous: TP_RATIO 1.75->2.0 in trader.py (2026-06-29). CM Sling Shot rebuild (2026-06-25). SESSION_END 23->24 (2026-06-26). ADX hard gate 20->25 (2026-06-27).",
+  "notes": "2026-07-01 nightly: CRITICAL BUG FOUND AND FIXED \u2014 review.py _self_improve() (runs nightly at 23:00 UTC, separate from this 02:00 UTC session) had a TP_RATIO auto-ratchet using blended wins/decided (\"TP hit rate\") across ALL 34 historical trades. Since CM Sling Shot (rebuilt 2026-06-25) has 0 closed trades, that blended rate was 100% pre-rebuild old-system data, yet it silently cut TP_RATIO 2.0\u21921.75 (06-29 night) \u21921.5 (06-30 night), undoing 4+ nightly sessions of evidenced 1:2 RR calibration. Same anti-pattern as the MIN_SCORE ratchet bug fixed 2026-06-16 (blended WR used to auto-tighten a parameter), except the sibling TP_RATIO block in the same function was never disabled. Fixed: TP_RATIO auto-adjust block in review.py disabled (mirrors MIN_SCORE disable). TP_RATIO restored to 2.0 in trader.py + config. ATOM SHORT still open (day 8): trail SL $1.6104, peak $1.4911, locking +76.7% leveraged (up from +63.4%), 9 trail updates now. CM Sling Shot still has 0 closed trades \u2014 MIN_SCORE, signal weights, ADX thresholds NOT touched (no valid new-system data). Other auto-adjust blocks in review.py _self_improve() (MIN_ADX, RISK_PCT, MAX_TRADES, WATCHLIST suspension, SESSION hours) share the same blended-all-time-data flaw but have not been caught drifting yet \u2014 flagged for future audit, not touched tonight (surgical fix only, no confirmed harm).",
   "suspended_coins": {}
 }

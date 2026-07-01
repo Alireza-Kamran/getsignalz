@@ -189,16 +189,17 @@ def _self_improve():
         adx_insight = f"ADX below {cur_adx}: {len(low_adx)} trades, WR={low_wr:.0f}%"
         insights.append(adx_insight)
 
-        # ── 3. TP_RATIO ─────────────────────────────────────────────────────────
+        # TP_RATIO auto-adjust DISABLED 2026-07-01 (same bug class as MIN_SCORE above: used
+        # blended "TP hit rate" = wins/decided across ALL-TIME trades, mixing the pre-2026-06-25
+        # old scoring system with the CM Sling Shot rebuild. CM Sling Shot had 0 closed trades, so
+        # every "TP hit rate" this block computed was 100% old-system data, yet it silently
+        # ratcheted TP_RATIO down 0.25/night once decided>=15: 2.0→1.75 (06-29)→1.5 (06-30),
+        # undoing 4+ nightly sessions of evidenced 1:2 RR calibration with no visibility to the
+        # memory-based review process. Restored to 2.0 on 2026-07-01. Do not re-enable without
+        # first splitting stats by strategy-version (pre/post rebuild).
         cur_tp = config.get("tp_ratio", 2.0)
         if decided >= 15:
             tp_rate = len(wins) / decided * 100
-            if tp_rate < 30 and cur_tp > 1.5:
-                config["tp_ratio"] = round(cur_tp - 0.25, 2)
-                changes.append(f"TP_RATIO {cur_tp}→{config['tp_ratio']}  (TP hit rate={tp_rate:.0f}% < 30% — target too far)")
-            elif tp_rate > 70 and cur_tp < 3.0:
-                config["tp_ratio"] = round(cur_tp + 0.25, 2)
-                changes.append(f"TP_RATIO {cur_tp}→{config['tp_ratio']}  (TP hit rate={tp_rate:.0f}% > 70% — extend target)")
             insights.append(f"TP hit rate: {tp_rate:.0f}%  (TP_RATIO={cur_tp})")
 
         # ── 4. RISK_PCT ─────────────────────────────────────────────────────────
