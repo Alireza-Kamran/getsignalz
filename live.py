@@ -98,7 +98,7 @@ def _check_closed(positions, account_val):
             logger.info(f"CLOSED {coin} | {'+' if lev_pct>0 else ''}{lev_pct:.1f}% | {hit.upper()}")
             log_trade_close(coin, exit_px, hit, lev_pct, dur)
             if hit == "sl":
-                _cooldown_until[coin] = int(time.time()) + 3600
+                _cooldown_until[coin] = int(time.time()) + 10800
             max_adverse = t.get("max_adverse_pct", 0.0)
             stats = tracker.close_position(coin, exit_px, hit, lev_pct, balance_before, balance_after)
 

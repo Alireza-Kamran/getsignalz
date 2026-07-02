@@ -13,6 +13,15 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.9.0 — 2026-07-02
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+**Code improvements (1):**
+- live.py: Extends per-coin SL cooldown from 1 candle (1h) to 3 candles (3h). Trade history shows RUNE SL×3 in sequence, ATOM SL×2 with the second at 0h duration, kPEPE SL×2 in rapid succession — all are re-entries within the 1h window that compounded the same directional loss. Three candles of separation gives the market time to print a new structure before the scoring system can re-qualify the coin, without tightening any signal quality criteria.
+
+---
+
 ## v1.8.1 — 2026-07-01
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%

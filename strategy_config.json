@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-07-01",
+  "last_updated": "2026-07-02",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-07-01 nightly: CRITICAL BUG FOUND AND FIXED \u2014 review.py _self_improve() (runs nightly at 23:00 UTC, separate from this 02:00 UTC session) had a TP_RATIO auto-ratchet using blended wins/decided (\"TP hit rate\") across ALL 34 historical trades. Since CM Sling Shot (rebuilt 2026-06-25) has 0 closed trades, that blended rate was 100% pre-rebuild old-system data, yet it silently cut TP_RATIO 2.0\u21921.75 (06-29 night) \u21921.5 (06-30 night), undoing 4+ nightly sessions of evidenced 1:2 RR calibration. Same anti-pattern as the MIN_SCORE ratchet bug fixed 2026-06-16 (blended WR used to auto-tighten a parameter), except the sibling TP_RATIO block in the same function was never disabled. Fixed: TP_RATIO auto-adjust block in review.py disabled (mirrors MIN_SCORE disable). TP_RATIO restored to 2.0 in trader.py + config. ATOM SHORT still open (day 8): trail SL $1.6104, peak $1.4911, locking +76.7% leveraged (up from +63.4%), 9 trail updates now. CM Sling Shot still has 0 closed trades \u2014 MIN_SCORE, signal weights, ADX thresholds NOT touched (no valid new-system data). Other auto-adjust blocks in review.py _self_improve() (MIN_ADX, RISK_PCT, MAX_TRADES, WATCHLIST suspension, SESSION hours) share the same blended-all-time-data flaw but have not been caught drifting yet \u2014 flagged for future audit, not touched tonight (surgical fix only, no confirmed harm).",
+  "notes": "2026-07-02 nightly: OBSERVATION ONLY - no code changes. Full review.py auto-adjust audit completed: MIN_ADX block (low_adx=0 matches, wont fire), RISK_PCT block (cur_risk=1% < 2% threshold, wont fire), MAX_TRADES block (cur_max=1 already, no change possible), WATCHLIST block (only RUNE hits n>=5 but avg=+3.3% > -15% threshold, safe), SESSION HOURS block (insufficient signal matches for edge hours, safe). ALL BLOCKS SAFE TONIGHT. First in-session CM Sling Shot signals appeared: BNB 6/8 at 15:01 UTC (ADX 36, SSL -1, RSI 54) and 16:01 UTC (ADX 32, SSL -1, RSI 64) - blocked by ATOM occupying MAX_TRADES=1 slot. RUNE 6/8 at 00:00-01:00 UTC (ADX 54, SSL -1) - off-session, correctly skipped. ATOM SHORT (day 9+): trail SL 1.6104, peak 1.4911, +76.7% leveraged locked, 9 trail updates. TP_RATIO=2.0 confirmed held through 23:00 review. CM Sling Shot still 0 closed trades - no scoring/weight changes possible.",
   "suspended_coins": {}
 }
