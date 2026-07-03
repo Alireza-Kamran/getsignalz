@@ -13,6 +13,14 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.9.1 — 2026-07-03
+
+**Stats:** 34 trades · WR: 30% · P&L: +329.1%
+
+No changes — all parameters within target bounds.
+
+---
+
 ## v1.9.0 — 2026-07-02
 
 **Stats:** 34 trades · WR: 30% · P&L: +329.1%

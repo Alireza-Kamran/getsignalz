@@ -317,7 +317,14 @@ def run():
             _now = int(time.time())
             already_open = {**positions, **{c: {} for c in _open_trades},
                             **{c: {} for c, exp in _cooldown_until.items() if _now < exp}}
-            if len(already_open) < MAX_TRADES:
+            # MAX_TRADES is a risk budget: only positions still risking capital
+            # count against it. Free-rolling trades (trail_stage >= 1 -> SL locked
+            # at/beyond entry) and cooldown markers must not block new entries.
+            at_risk = sum(
+                1 for c in set(positions) | set(_open_trades)
+                if _open_trades.get(c, {}).get("trail_stage", 0) < 1
+            )
+            if at_risk < MAX_TRADES:
                 best = find_best_setup(already_open, hour_utc=h)
 
                 if best:

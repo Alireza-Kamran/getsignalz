@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-07-02",
+  "last_updated": "2026-07-03",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-07-02 nightly: OBSERVATION ONLY - no code changes. Full review.py auto-adjust audit completed: MIN_ADX block (low_adx=0 matches, wont fire), RISK_PCT block (cur_risk=1% < 2% threshold, wont fire), MAX_TRADES block (cur_max=1 already, no change possible), WATCHLIST block (only RUNE hits n>=5 but avg=+3.3% > -15% threshold, safe), SESSION HOURS block (insufficient signal matches for edge hours, safe). ALL BLOCKS SAFE TONIGHT. First in-session CM Sling Shot signals appeared: BNB 6/8 at 15:01 UTC (ADX 36, SSL -1, RSI 54) and 16:01 UTC (ADX 32, SSL -1, RSI 64) - blocked by ATOM occupying MAX_TRADES=1 slot. RUNE 6/8 at 00:00-01:00 UTC (ADX 54, SSL -1) - off-session, correctly skipped. ATOM SHORT (day 9+): trail SL 1.6104, peak 1.4911, +76.7% leveraged locked, 9 trail updates. TP_RATIO=2.0 confirmed held through 23:00 review. CM Sling Shot still 0 closed trades - no scoring/weight changes possible.",
+  "notes": "2026-07-03 nightly: ONE surgical fix in live.py - MAX_TRADES gate now counts only at-risk positions (trail_stage < 1). Evidence: ATOM SHORT free-rolling since ~Jun 25 (trail_stage=2, SL 1.6104 locks +76.7% vs entry 1.7442, zero remaining risk) held the single slot 10 days and blocked 5 consecutive days of in-session CM Sling Shot signals (ETH 6-7/8 Jun 28, OP 7/8 Jun 30, BNB 6/8 x2 Jul 2, OP 6/8 x2 Jul 2 21:00/22:01 UTC). CM Sling Shot still 0 closed trades BECAUSE of this - data starvation. Fix also stops cooldown markers counting as open trades (v1.9.0 raised SL cooldown 1h->3h at 23:00 Jul 2; under old counting one SL would have frozen ALL trading 3h with MAX_TRADES=1). already_open still passed to find_best_setup unchanged - same-coin re-entry still blocked. max_trades stays 1: risk budget unchanged, only the counting fixed (breakeven/locked-profit positions consume no risk). NO scoring/weight/threshold changes - CM Sling Shot has 0 closed trades, old-system data not valid for new scoring. TP_RATIO=2.0 and MIN_SCORE=6 verified intact in trader.py at session start (ratchet disable holding). v1.9.0 (23:03 Jul 2, ai_brain pathway) = SL cooldown 1h->3h in live.py - benign, kept. One transient RemoteDisconnected cycle error 17:02 UTC - retry handled, no action.",
   "suspended_coins": {}
 }
