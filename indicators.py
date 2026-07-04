@@ -9,7 +9,7 @@ TESTNET_URL = "https://api.hyperliquid-testnet.xyz"
 def fetch_candles(symbol="ETH", interval="1h", lookback_bars=350):
     info = Info(TESTNET_URL, skip_ws=True)
     end_ms = int(time.time() * 1000)
-    interval_ms = {"1m":60000,"5m":300000,"15m":900000,"1h":3600000,"4h":14400000}
+    interval_ms = {"1m":60000,"5m":300000,"15m":900000,"1h":3600000,"4h":14400000,"1d":86400000}
     start_ms = end_ms - lookback_bars * interval_ms[interval]
     candles = info.candles_snapshot(symbol, interval, start_ms, end_ms)
     if not candles:
@@ -20,6 +20,11 @@ def fetch_candles(symbol="ETH", interval="1h", lookback_bars=350):
         df[col] = df[col].astype(float)
     df["time"] = pd.to_datetime(df["time"], unit="ms")
     df = df.set_index("time").sort_index()
+
+    # Signals must confirm on CLOSED candles only (manual strategy reads closed
+    # HA bars; intra-bar EMA crossings repaint). Drop the still-forming last bar.
+    if len(df) and int(df.index[-1].value // 1_000_000) + interval_ms[interval] > end_ms:
+        df = df.iloc[:-1]
 
     # Keep real prices for execution
     df["real_close"] = df["close"]
