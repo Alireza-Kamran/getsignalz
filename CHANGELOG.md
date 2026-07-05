@@ -13,6 +13,15 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.9.3 — 2026-07-05
+
+**Stats:** 38 trades · WR: 28% · P&L: +330.4%
+
+**Parameter changes (1):**
+- SESSION start 11:00→12:00 UTC  (WR=0% < 25%)
+
+---
+
 ## v1.9.2 — 2026-07-04
 
 **Stats:** 35 trades · WR: 29% · P&L: +309.2%

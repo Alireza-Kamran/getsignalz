@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": "2026-07-04",
+  "last_updated": "2026-07-05",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
   "risk_pct": 0.01,
   "trail_pct": 0.08,
   "tp_ratio": 2.0,
-  "session_start_utc": 11,
+  "session_start_utc": 12,
   "session_end_utc": 24,
   "min_adx": 30,
   "watchlist": [
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-07-04 nightly: FIRST CM SLING SHOT TRADE FIRED - BNB SHORT 11:04 UTC Jul 3, score 6/8, 4h TF, aggressive pullback entry, entry $564.66, SL $575.95 (2% clamp), TP $542.07 (2.0 RR), 10x. at_risk gate fix from Jul 3 WORKED: trade opened while ATOM free-rolls (stage 2, +76.7% locked). BNB currently adverse (max -17.6%, price ~$573 vs SL $575.95) - SL will handle it; n=1, no conclusions. TWO signal-integrity bugs fixed in indicators.py fetch_candles: (1) last candle returned was the IN-PROGRESS bar -> all signals (HA close EMA crossings, Williams %R, RSI, ADX) evaluated on unclosed, repainting data; BNB entry fired 3h into the 08:00-12:00 4h bar. Now drops the still-forming bar: signals confirm on CLOSED candles only, matching how Mr G reads closed HA bars. Verified: 15m/1h/4h/1d all return last-closed bar. Executor unaffected (prices/sizes/clamps from live fill). (2) interval_ms had no '1d' key -> get_macro_trend for 4h-TF setups ALWAYS KeyError'd, silently returned 0 = '4H cloud neutral' +1. Daily trend was NEVER actually checked on any 4h signal since Jun 25 rebuild. Fixed: '1d':86400000 added. Verified get_macro_trend('BNB','4h') = -1 (real daily cloud read: fast 590.78 < slow 605.44). For BNB's open trade the bug UNDERSTATED score (true daily = aligned -> 7/8); when daily is AGAINST, bug gave +1 instead of -1 (2-pt overstatement) - that class of bad 4h entries is now correctly killed. NO scoring/weight/threshold changes: CM Sling Shot still 0 CLOSED trades. MIN_SCORE=6, TP_RATIO=2.0, MIN_ADX gate 25/bonus 30, TRAIL_PCT=8%, MAX_TRADES=1 (at-risk counting), SESSION 11-24 UTC, WATCHLIST 14 all verified and unchanged. 504 cluster 04:24-08:34 UTC Jul 3 = transient HL/CloudFront, retries handled, no action. v1.9.1 (23:05 Jul 3) audited = ai_brain committing the Jul 3 at_risk fix, no changes of its own.",
+  "notes": "2026-07-05 nightly: FIRST CM SLING SHOT TRADE CLOSED - BNB SHORT -20.0% SL after 28.1h (15:10 UTC Jul 4). Profile: score 6/8 (honest 7 post daily-macro fix), 4h TF, aggressive pullback entry, ADX 33, entered mid-bar pre-closed-candle-fix, never went favorable (max adverse -17.6%), shorted into broad SSL+1 rally. SECOND CM trade fired 54min after slot freed: APT SHORT 16:04 UTC Jul 4, score 6/8, 4h TF, 4min after 4h bar close (closed-candle fix timing working - fresh-bar entry, not late-window). Fill $0.6381, SL clamped 2% to $0.65086, TP $0.61258 (2.0 RR). Trail->breakeven at 00:11 Jul 5 (1R reached); max adverse only -2.54%. at_risk gate cycling correctly. ATOM day 12: bounced to $1.6043, within 0.4% of trail SL $1.6104, survived - still locked +76.7%. LEVERAGE FINDING (not a bug): signal computed 12.5x for APT but HL coin max is 3x; live.py deliberately records HL actual leverage. Sizing is risk-based (risk_usd/sl_pct) so account risk correct (~0.9%) regardless. Side effects: (a) executor SL clamp uses PLANNED leverage (2% clamp at 12.5x vs 8.3% allowed at 3x) - conservative, tightened APT structure SL 2.19%->2.0%; (b) channel lev_pct not comparable across coins (BNB -20% ROE at 10x vs APT small % at 3x). Flagged for future normalization, no code change tonight. NO parameter changes: CM system n=1 closed trade. MIN_SCORE=6, TP_RATIO=2.0, MIN_ADX gate25/bonus30, TRAIL_PCT=8%, MAX_TRADES=1 at-risk counting, SESSION 11-24, WATCHLIST 14 - all verified by grep at session start; v1.9.2 (23:05 Jul 4) audited = ai_brain committing Jul 4 indicator fixes, no changes of its own. Note: 23:00 Jul 4 candle scan ran at 23:05 (review.py/ai_brain block main loop ~5min) - last in-session scan runs late; structural, benign, watch. 504 cluster 07:07 Jul 4 transient, handled. BNB now 2T/0%WR/-15%avg - below 5-trade removal threshold, keep. Ex-post note: 5% trail would have banked +102% on ATOM's Jul 4 bounce vs +76.7% locked at 8% - but 8% validated across 34 old trades; revisit only at CM n>=10.",
   "suspended_coins": {}
 }
