@@ -34,7 +34,7 @@ RISK_PCT    = 0.01
 MAX_TRADES  = 1
 
 # ── Session: London + NY close (11:00 - 24:00 UTC) ────────────────────────────
-SESSION_START = 12
+SESSION_START = 11
 SESSION_END   = 24
 
 

@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "last_updated": "2026-07-05",
+  "last_updated": "2026-07-06",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
   "risk_pct": 0.01,
   "trail_pct": 0.08,
   "tp_ratio": 2.0,
-  "session_start_utc": 12,
+  "session_start_utc": 11,
   "session_end_utc": 24,
   "min_adx": 30,
   "watchlist": [
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-07-05 nightly: FIRST CM SLING SHOT TRADE CLOSED - BNB SHORT -20.0% SL after 28.1h (15:10 UTC Jul 4). Profile: score 6/8 (honest 7 post daily-macro fix), 4h TF, aggressive pullback entry, ADX 33, entered mid-bar pre-closed-candle-fix, never went favorable (max adverse -17.6%), shorted into broad SSL+1 rally. SECOND CM trade fired 54min after slot freed: APT SHORT 16:04 UTC Jul 4, score 6/8, 4h TF, 4min after 4h bar close (closed-candle fix timing working - fresh-bar entry, not late-window). Fill $0.6381, SL clamped 2% to $0.65086, TP $0.61258 (2.0 RR). Trail->breakeven at 00:11 Jul 5 (1R reached); max adverse only -2.54%. at_risk gate cycling correctly. ATOM day 12: bounced to $1.6043, within 0.4% of trail SL $1.6104, survived - still locked +76.7%. LEVERAGE FINDING (not a bug): signal computed 12.5x for APT but HL coin max is 3x; live.py deliberately records HL actual leverage. Sizing is risk-based (risk_usd/sl_pct) so account risk correct (~0.9%) regardless. Side effects: (a) executor SL clamp uses PLANNED leverage (2% clamp at 12.5x vs 8.3% allowed at 3x) - conservative, tightened APT structure SL 2.19%->2.0%; (b) channel lev_pct not comparable across coins (BNB -20% ROE at 10x vs APT small % at 3x). Flagged for future normalization, no code change tonight. NO parameter changes: CM system n=1 closed trade. MIN_SCORE=6, TP_RATIO=2.0, MIN_ADX gate25/bonus30, TRAIL_PCT=8%, MAX_TRADES=1 at-risk counting, SESSION 11-24, WATCHLIST 14 - all verified by grep at session start; v1.9.2 (23:05 Jul 4) audited = ai_brain committing Jul 4 indicator fixes, no changes of its own. Note: 23:00 Jul 4 candle scan ran at 23:05 (review.py/ai_brain block main loop ~5min) - last in-session scan runs late; structural, benign, watch. 504 cluster 07:07 Jul 4 transient, handled. BNB now 2T/0%WR/-15%avg - below 5-trade removal threshold, keep. Ex-post note: 5% trail would have banked +102% on ATOM's Jul 4 bounce vs +76.7% locked at 8% - but 8% validated across 34 old trades; revisit only at CM n>=10.",
+  "notes": "2026-07-06 nightly: CM dataset now n=4 closed. OP LONG +34.0% (score 7/8, 1h TF, entered 11:03 UTC Jul 5, trail 0.5R close after 6.0h - FIRST CM win). APT SHORT +2.9% trail-breakeven (27.2h). DOGE SHORT -15.7% SL (score 7/8, 4h TF, fresh-bar entry 16:03 Jul 5, 6.4h). With BNB -20.0%: CM net +1.2%, EV +0.3%/trade. PATTERN WATCH (not yet acted on): all three 4h-TF shorts fired against 1h SSL+1 tide, net -32.8%; the one 1h-TF with-tide trade made +34.0%. Candidate structural filter: require 1h SSL agreement for 4h-TF entries. Revisit at CM n>=8. REGRESSION FIXED: v1.9.3 (23:05 Jul 5, review.py SESSION auto-adjust) trimmed session start 11->12 UTC on WR=0 pct - its win counter requires result==tp, so OP +34.0% trail close counted as a LOSS; real hour-11 economics net +14%. Reverted to 11 in trader.py+config; SESSION block in review.py DISABLED (third blended-metric incident: MIN_SCORE, TP_RATIO, SESSION). NO strategy changes: n=4 too small for scoring/weight/threshold moves (12th consecutive session holding discipline). MIN_SCORE=6, TP_RATIO=2.0, MIN_ADX gate25/bonus30, TRAIL_PCT=8pct, MAX_TRADES=1 at-risk counting, WATCHLIST 14 - all verified tonight. RUNE feed FROZE on HL testnet (price 0.4133/RSI 53/ADX 55 identical 16:00-23:00 Jul 5, then RSI 82 print at 00:01) - frozen candles cannot produce new EMA crossings so signal risk low, but treat any RUNE signal with suspicion; add staleness guard if it recurs. 504 clusters 06:49 + 15:57 Jul 5 transient, retries handled. ATOM day 13: locked +76.7%, trail SL 1.6104, price drifted to ~1.589 (within 1.3pct of trigger).",
   "suspended_coins": {}
 }

@@ -284,20 +284,16 @@ def _self_improve():
         cur_end   = config.get("session_end_utc", 22)
         window    = cur_end - cur_start
 
-        # Only trim leading/trailing hours, keep ≥ 8h window
-        if window > 8:
-            for h in range(cur_start, cur_start + 3):
-                hp = hour_perf.get(h, {})
-                if hp.get("n", 0) >= 3 and hp["w"] / hp["n"] * 100 < 25:
-                    config["session_start_utc"] = h + 1
-                    changes.append(f"SESSION start {h}:00→{h+1}:00 UTC  (WR={hp['w']/hp['n']*100:.0f}% < 25%)")
-                    break
-            for h in range(cur_end - 1, cur_end - 4, -1):
-                hp = hour_perf.get(h, {})
-                if hp.get("n", 0) >= 3 and hp["w"] / hp["n"] * 100 < 25:
-                    config["session_end_utc"] = h
-                    changes.append(f"SESSION end {h+1}:00→{h}:00 UTC  (WR={hp['w']/hp['n']*100:.0f}% < 25%)")
-                    break
+        # SESSION HOURS auto-adjust DISABLED 2026-07-06 - third instance of the blended-metric
+        # bug class (MIN_SCORE, TP_RATIO, now SESSION). Two flaws: (1) the win counter above
+        # requires result==tp, but the trail engine exits winners with result==sl, so every
+        # profitable trail close is counted as a loss; (2) hour stats blend pre/post-2026-06-25
+        # strategy regimes. v1.9.3 (2026-07-05 23:05) trimmed hour 11 on WR=0% when the actual
+        # hour-11 entries were BNB -20.0% and OP +34.0% - net POSITIVE, and OP was the best CM
+        # Sling Shot trade so far, a +34% trail close misread as a loss. Reverted to 11:00 by
+        # the 2026-07-06 nightly. Do not re-enable without (a) counting wins by lev_pct > 0 and
+        # (b) splitting stats by strategy version. hour_perf above kept for insight only.
+        _ = window  # retained for future insight use
 
         # ── 8. Confluence signal quality analysis (insight only) ─────────────────
         factor_stats = defaultdict(lambda: {"w":0,"n":0})
