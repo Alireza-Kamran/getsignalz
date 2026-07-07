@@ -92,7 +92,10 @@ def build_df(coin, tf="1h", bars=350):
     df["sl_long"]  = sl_long
     df["sl_short"] = sl_short
 
-    return df.dropna(subset=["rsi", "ssl", "atr", "adx", "ss_fast", "willr", "ema200"])
+    df = df.dropna(subset=["rsi", "ssl", "atr", "adx", "ss_fast", "willr", "ema200"])
+    if len(df) >= 5 and df["real_close"].iloc[-5:].nunique() == 1:
+        return None
+    return df
 
 
 def get_macro_trend(coin, current_tf="1h"):

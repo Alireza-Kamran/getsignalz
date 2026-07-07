@@ -13,6 +13,16 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.10.0 — 2026-07-07
+
+**Stats:** 47 trades · WR: 24% · P&L: +263.9%
+
+**Code improvements (2):**
+- live.py: abs(price - entry) is symmetric: with TP_RATIO=2.0 the risk distance equals the SL distance exactly, so the breakeven trail fires when price drops to the SL level just as it would when price rises to 1R profit. Today's SOL trade confirmed this precisely — trail fired at 20:36 when price reached ~$80.237 (= entry - 0.810 = SL), cancelled the original SL and placed a new one at entry $81.047, which immediately filled with slippage at ~$80.08, producing -11.9% instead of a clean -10% SL exit. Replacing abs() with (price - entry) * direction ensures the trail only activates when price has moved in the profitable direction.
+- trader.py: Guards against frozen testnet feeds. RUNE showed identical price $0.3874, RSI 25, ADX 57 at both 20:01 and 21:01 today — repeating the Jul 5 freeze that ran 16:00-23:00. Frozen candles produce no new EMA crossings so signal risk is low, but they waste scan cycles and can produce misleading indicator readings if the feed resumes mid-bar. Returning None on 5 consecutive identical real closes skips the coin silently, consistent with how fetch_candles already handles missing data.
+
+---
+
 ## v1.9.4 — 2026-07-06
 
 **Stats:** 42 trades · WR: 27% · P&L: +321.6%

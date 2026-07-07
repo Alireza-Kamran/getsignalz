@@ -53,10 +53,10 @@ def _check_trail(positions, account_val, mids=None):
         # Use original R derived from TP (TP = entry ± 2R) so risk stays
         # correct even after SL is moved to breakeven (where entry-sl = 0)
         risk  = abs(tp - entry) / 2.0
-        moved = abs(price - entry)
+        favor = (price - entry) * direction  # positive only when trade is in profit
 
         # At 1:1 — move SL to breakeven
-        if moved >= risk and t.get("trail_stage", 0) == 0:
+        if favor >= risk and t.get("trail_stage", 0) == 0:
             new_sl = entry
             _open_trades[coin]["sl"] = new_sl
             _open_trades[coin]["trail_stage"] = 1
@@ -66,7 +66,7 @@ def _check_trail(positions, account_val, mids=None):
             tg.dm_owner(f"🔒 {coin} SL moved to breakeven ${new_sl:.4f}")
 
         # At 1.5:1 — lock in 0.5R profit
-        elif moved >= risk * 1.5 and t.get("trail_stage", 0) == 1:
+        elif favor >= risk * 1.5 and t.get("trail_stage", 0) == 1:
             new_sl = entry + direction * risk * 0.5
             _open_trades[coin]["sl"] = new_sl
             _open_trades[coin]["trail_stage"] = 2
