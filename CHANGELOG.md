@@ -13,6 +13,15 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.10.1 — 2026-07-08
+
+**Stats:** 52 trades · WR: 25% · P&L: +240.7%
+
+**Parameter changes (1):**
+- MIN_ADX 30→35  (low-ADX WR=17% < 35% on 6 trades)
+
+---
+
 ## v1.10.0 — 2026-07-07
 
 **Stats:** 47 trades · WR: 24% · P&L: +263.9%

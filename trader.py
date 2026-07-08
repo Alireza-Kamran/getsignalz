@@ -28,7 +28,7 @@ WATCHLIST = [
 
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 6       # minimum confluence (max 8)
-MIN_ADX     = 30
+MIN_ADX     = 35
 TP_RATIO    = 2.0         # 1:2 RR minimum — aligns with score_setup qualification logic
 RISK_PCT    = 0.01
 MAX_TRADES  = 1

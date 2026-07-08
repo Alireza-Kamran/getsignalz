@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-07-07",
+  "last_updated": "2026-07-08",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
@@ -9,7 +9,7 @@
   "tp_ratio": 2.0,
   "session_start_utc": 11,
   "session_end_utc": 24,
-  "min_adx": 30,
+  "min_adx": 35,
   "watchlist": [
     "ETH",
     "WLD",
