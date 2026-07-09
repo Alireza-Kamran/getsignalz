@@ -28,7 +28,7 @@ WATCHLIST = [
 
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 6       # minimum confluence (max 8)
-MIN_ADX     = 35
+MIN_ADX     = 40
 TP_RATIO    = 2.0         # 1:2 RR minimum — aligns with score_setup qualification logic
 RISK_PCT    = 0.01
 MAX_TRADES  = 1
@@ -93,7 +93,7 @@ def build_df(coin, tf="1h", bars=350):
     df["sl_short"] = sl_short
 
     df = df.dropna(subset=["rsi", "ssl", "atr", "adx", "ss_fast", "willr", "ema200"])
-    if len(df) >= 5 and df["real_close"].iloc[-5:].nunique() == 1:
+    if len(df) >= 3 and df["real_close"].iloc[-3:].nunique() == 1:
         return None
     return df
 

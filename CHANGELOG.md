@@ -13,6 +13,18 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.11.0 — 2026-07-09
+
+**Stats:** 55 trades · WR: 23% · P&L: +219.6%
+
+**Parameter changes (1):**
+- MIN_ADX 35→40  (low-ADX WR=13% < 35% on 15 trades)
+
+**Code improvements (1):**
+- trader.py: RUNE showed frozen data (identical $0.3982, RSI 84, ADX 38) for 3 consecutive hourly candles in today's logs (20:00–22:00 UTC), reproducing the Jul 5 staleness incident. The 5-bar guard misses freezes shorter than 5 candles. Three consecutive identical real closes is impossible in a liquid market; tightening to 3 bars reliably rejects frozen feeds without false-positives on legitimate consolidation.
+
+---
+
 ## v1.10.1 — 2026-07-08
 
 **Stats:** 52 trades · WR: 25% · P&L: +240.7%
