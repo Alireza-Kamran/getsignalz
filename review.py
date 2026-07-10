@@ -179,12 +179,12 @@ def _self_improve():
         low_wins = [t for t in low_adx if t["result"] == "tp" and t["lev_pct"] > 0]
         low_wr   = len(low_wins) / len(low_adx) * 100 if low_adx else 100
 
-        if len(low_adx) >= 5 and low_wr < 35 and cur_adx < 50:
-            config["min_adx"] = min(cur_adx + 5, 50)
-            changes.append(f"MIN_ADX {cur_adx}→{config['min_adx']}  (low-ADX WR={low_wr:.0f}% < 35% on {len(low_adx)} trades)")
-        elif len(low_adx) >= 5 and low_wr > 65 and cur_adx > 20:
-            config["min_adx"] = max(cur_adx - 5, 20)
-            changes.append(f"MIN_ADX {cur_adx}→{config['min_adx']}  (low-ADX WR={low_wr:.0f}% > 65% — filter too strict)")
+        # MIN_ADX auto-adjust DISABLED 2026-07-10 — FOURTH blended-metric regression
+        # (after MIN_SCORE, TP_RATIO, SESSION). This block ratcheted MIN_ADX 30->35 (Jul 8)
+        # ->40 (Jul 9) using low_wr counted with result=='tp', which mislabels every trail-SL
+        # winner as a loss, over BLENDED all_trades (pre/post 2026-06-25 rebuild). Post-rebuild
+        # CM data shows high-ADX trades did WORSE, so the ratchet's premise was backwards too.
+        # Do not re-enable without splitting by strategy-version and counting PnL, not labels.
 
         adx_insight = f"ADX below {cur_adx}: {len(low_adx)} trades, WR={low_wr:.0f}%"
         insights.append(adx_insight)

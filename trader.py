@@ -28,7 +28,7 @@ WATCHLIST = [
 
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 6       # minimum confluence (max 8)
-MIN_ADX     = 40
+MIN_ADX     = 30      # ADX bonus threshold (hard gate is 25 below); reverted from rogue 40 on 2026-07-10
 TP_RATIO    = 2.0         # 1:2 RR minimum — aligns with score_setup qualification logic
 RISK_PCT    = 0.01
 MAX_TRADES  = 1
@@ -142,10 +142,16 @@ def score_setup(df, direction, macro_trend=0):
         return 0, [], None, None, None, None, None
     if direction == -1 and price > ema200:
         return 0, [], None, None, None, None, None
-    # Entry signal required
+    # Entry signal required — CONSERVATIVE (confirmed EMA re-cross) ONLY.
+    # 2026-07-10: aggressive pullback entries hard-gated out. Over CM Sling Shot n=19 closed
+    # aggressive trades EV was -10.4%/trade (-198% total, only 4/19 positive); the 2 conservative
+    # entries were both positive (+2.4% EV). Anticipation (pulled back to fast EMA) entries get
+    # run over when the pullback is actually a reversal — every blowup (ETH -54.5/-32.3/-38.6,
+    # BNB, INJ, SOL) was aggressive. Confirmation (crossed back through fast EMA) waits for the
+    # trend to actually resume. Revisit if conservative EV underperforms over the next 10 closes.
     has_conservative = (direction == 1 and bool(last.get("en_long", False))) or                        (direction == -1 and bool(last.get("en_short", False)))
     has_aggressive   = (direction == 1 and bool(last.get("pb_long", False))) or                        (direction == -1 and bool(last.get("pb_short", False)))
-    if not has_conservative and not has_aggressive:
+    if not has_conservative:
         return 0, [], None, None, None, None, None
     # Williams %R: reject if already exhausted (late entry)
     willr     = float(last.get("willr", -50))

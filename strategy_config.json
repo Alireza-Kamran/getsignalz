@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-07-09",
+  "last_updated": "2026-07-10",
   "updated_by": "auto-nightly",
   "min_score": 6,
   "max_trades": 1,
@@ -9,7 +9,7 @@
   "tp_ratio": 2.0,
   "session_start_utc": 11,
   "session_end_utc": 24,
-  "min_adx": 40,
+  "min_adx": 30,
   "watchlist": [
     "ETH",
     "WLD",
@@ -29,7 +29,7 @@
   "signal_weights": {
     "ema_cloud": 2,
     "entry_conservative": 2,
-    "entry_aggressive": 1,
+    "entry_aggressive": -99,
     "macro_4h_aligned": 2,
     "macro_4h_neutral": 1,
     "macro_4h_against": -1,
@@ -37,6 +37,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-07-06 nightly: CM dataset now n=4 closed. OP LONG +34.0% (score 7/8, 1h TF, entered 11:03 UTC Jul 5, trail 0.5R close after 6.0h - FIRST CM win). APT SHORT +2.9% trail-breakeven (27.2h). DOGE SHORT -15.7% SL (score 7/8, 4h TF, fresh-bar entry 16:03 Jul 5, 6.4h). With BNB -20.0%: CM net +1.2%, EV +0.3%/trade. PATTERN WATCH (not yet acted on): all three 4h-TF shorts fired against 1h SSL+1 tide, net -32.8%; the one 1h-TF with-tide trade made +34.0%. Candidate structural filter: require 1h SSL agreement for 4h-TF entries. Revisit at CM n>=8. REGRESSION FIXED: v1.9.3 (23:05 Jul 5, review.py SESSION auto-adjust) trimmed session start 11->12 UTC on WR=0 pct - its win counter requires result==tp, so OP +34.0% trail close counted as a LOSS; real hour-11 economics net +14%. Reverted to 11 in trader.py+config; SESSION block in review.py DISABLED (third blended-metric incident: MIN_SCORE, TP_RATIO, SESSION). NO strategy changes: n=4 too small for scoring/weight/threshold moves (12th consecutive session holding discipline). MIN_SCORE=6, TP_RATIO=2.0, MIN_ADX gate25/bonus30, TRAIL_PCT=8pct, MAX_TRADES=1 at-risk counting, WATCHLIST 14 - all verified tonight. RUNE feed FROZE on HL testnet (price 0.4133/RSI 53/ADX 55 identical 16:00-23:00 Jul 5, then RSI 82 print at 00:01) - frozen candles cannot produce new EMA crossings so signal risk low, but treat any RUNE signal with suspicion; add staleness guard if it recurs. 504 clusters 06:49 + 15:57 Jul 5 transient, retries handled. ATOM day 13: locked +76.7%, trail SL 1.6104, price drifted to ~1.589 (within 1.3pct of trigger).",
+  "notes": "2026-07-10 nightly: DECISIVE ACTION after 12+ sessions holding discipline. CM Sling Shot (post-2026-06-25 rebuild) now n=21 closed and the verdict is in: EV -9.2%/trade, -193% total (vs OLD pre-rebuild system +11.6% EV / +405% over 35). Root cause isolated: ENTRY TYPE. Aggressive (pullback-to-fast-EMA) entries n=19: -198% total, only 4/19 positive, EV -10.4%. Conservative (confirmed EMA re-cross) entries n=2: both positive, EV +2.4%. EVERY blowup was aggressive: ETH x3 (-54.5/-32.3/-38.6, all aggressive longs), BNB x2, INJ x2, SOL, DOGE. CHANGE 1 (trader.py score_setup): hard-gate to require has_conservative; aggressive setups now return score 0. Removes the entire demonstrated loss book; keeps the confirmation entries that at least aren't losing. Freq drops to ~2 signals/week (only 2 of 21 recent were conservative) \u2014 acceptable: better no trade than -EV trade. Revisit if conservative EV underperforms over next 10 closes. CHANGE 2: MIN_ADX reverted 40->30 (trader.py bonus threshold; hard gate stays 25) AND review.py MIN_ADX auto-adjust block DISABLED \u2014 FOURTH blended-metric regression (after MIN_SCORE, TP_RATIO, SESSION). It ratcheted 30->35 (Jul 8, v1.10.1) ->40 (Jul 9, v1.11.0) using low_wr with result=='tp' (mislabels trail-SL winners as losses) over blended all_trades. Post-rebuild CM data shows high-ADX trades did WORSE (ADX>35 EV -18.0% vs ADX<=35 ~breakeven), so the ratchet premise was also backwards. Memory pre-authorized disabling on first wrong fire. NOT CHANGED: MIN_SCORE=6 (conservative+4H-aligned auto-clears 6; no gating benefit to raising), TRAIL_PCT=8% (ATOM June short banked +76.1% TP via trail after 320h \u2014 the alpha engine, untouched), TP_RATIO=2.0, MAX_TRADES=1, SESSION 11-24, WATCHLIST 14 (no coin meets removal bar under conservative-only yet). FLAGGED for next session, NOT fixed tonight (one-bug-one-fix discipline): (a) ETH -54.5% loss exceeded the MAX_LEV_LOSS=25 cap \u2014 SL at 1.29% x ~20x should cap ~26%, but price exited 1.44% past the SL trigger (slippage/gap-through on fast move); two ETH July trades also show identical exit 1800.15 (possible ghost/exit-classification artifact). Investigate executor SL execution and consider lowering MAX_LEVERAGE from 25. (b) Drawdown -82.1% is severe; with conservative-only + leverage review, expect it to stop growing. Transient: 'Another instance already running PID 240189' at 23:02 was the 23:00 review restart overlap (single occurrence, clean restart 23:03), not the orphan-spam pattern \u2014 no action.",
   "suspended_coins": {}
 }
