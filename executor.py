@@ -187,7 +187,7 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
     # Place SL order
     # LONG SL = SELL stop: limit must be BELOW trigger (accept selling into the drop)
     # SHORT SL = BUY stop: limit must be ABOVE trigger (accept buying into the rise)
-    slippage_buf = 0.02
+    slippage_buf = 0.003
     sl_trigger  = _px(sl_price)
     sl_limit_px = _px(sl_price * (1 - slippage_buf) if is_buy else sl_price * (1 + slippage_buf))
     sl_result = exchange.order(

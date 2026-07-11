@@ -37,6 +37,10 @@ PROTECTED_STRINGS = [_PK, _ACCT]
 
 MAX_CHANGES = 12
 
+# Full brain runs (~37K-token prompt + detailed JSON reply) legitimately take
+# ~5 min; 300s left no headroom and tripped on heavier nights. 10 min is safe.
+BRAIN_TIMEOUT = 600
+
 
 def _read(name: str) -> str:
     p = PROJECT_DIR / name
@@ -207,7 +211,7 @@ def run_ai_brain() -> dict:
 
         proc = subprocess.run(
             ["claude", "--print", "--model", MODEL],
-            input=prompt, capture_output=True, text=True, timeout=300,
+            input=prompt, capture_output=True, text=True, timeout=BRAIN_TIMEOUT,
             env={**os.environ}
         )
 
@@ -230,7 +234,7 @@ def run_ai_brain() -> dict:
         result["error"] = f"Claude returned invalid JSON: {e} — raw: {proc.stdout[:300]}"
         return result
     except subprocess.TimeoutExpired:
-        result["error"] = "Claude brain timed out (>5 min)"
+        result["error"] = f"Claude brain timed out (>{BRAIN_TIMEOUT // 60} min)"
         return result
     except Exception as e:
         result["error"] = f"Brain error: {e}\n{traceback.format_exc()[:400]}"

@@ -13,6 +13,15 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.12.0 — 2026-07-11
+
+**Stats:** 58 trades · WR: 24% · P&L: +232.9%
+
+**Code improvements (1):**
+- executor.py: 2% SL limit buffer directly caused ETH -54.5% loss: SL trigger was correctly capped at 1.29% from entry (25% MAX_LEV_LOSS ÷ 20x), but the fill-limit was set 2% below the trigger, allowing execution up to 3.29% from entry × 20x = 65.8% leveraged loss. Price fell only 1.44% past trigger — within the 2% window — producing the observed 54.6% loss. ETH/BNB/INJ spreads are 0.01-0.05%; 0.3% buffer provides ample room for normal fills while keeping worst-case SL execution at (cap_pct + 0.3%) × leverage ≈ 31% max instead of 65%. Also tightens TP fills to capture closer to the intended reward price.
+
+---
+
 ## v1.11.1 — 2026-07-10
 
 **Stats:** 58 trades · WR: 24% · P&L: +232.9%
