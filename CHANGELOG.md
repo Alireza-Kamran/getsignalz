@@ -13,6 +13,17 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.13.0 — 2026-07-13
+
+**Stats:** 62 trades · WR: 22% · P&L: +204.8%
+
+**Code improvements (3):**
+- review.py: Profitable trail-SL exits carry result='sl' and were excluded from both wins and losses, deflating the reported WR by ~15pp and corrupting the RISK_PCT ratchet logic and nightly DM stats. Matches the already-correct lev_pct>0 logic in tracker.close_position.
+- review.py: Same misclassification in the confluence signal quality analysis: factors that appeared in profitable trail exits were miscounted as losses, corrupting the 'Best confluence signals' insight table in the nightly DM.
+- tracker.py: WATCHLIST has 14 coins; dashboard displayed 15 since before APT was added or a coin was removed.
+
+---
+
 ## v1.12.1 — 2026-07-12
 
 **Stats:** 61 trades · WR: 23% · P&L: +222.3%

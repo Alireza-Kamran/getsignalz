@@ -161,8 +161,8 @@ def _self_improve():
             )
             return
 
-        wins    = [t for t in all_trades if t["result"] == "tp" and t["lev_pct"] > 0]
-        losses  = [t for t in all_trades if t["result"] == "sl" and t["lev_pct"] < 0]
+        wins    = [t for t in all_trades if (t.get("lev_pct") or 0) > 0]
+        losses  = [t for t in all_trades if (t.get("lev_pct") or 0) < 0]
         decided = len(wins) + len(losses)
         wr      = len(wins) / decided * 100 if decided > 0 else 0
         total_pnl = sum(t.get("lev_pct", 0) or 0 for t in all_trades)
@@ -301,7 +301,7 @@ def _self_improve():
             sig = _match_signal(t, signals)
             if not sig:
                 continue
-            is_win = t["result"] == "tp" and t["lev_pct"] > 0
+            is_win = (t.get("lev_pct") or 0) > 0
             for reason in sig.get("reasons", []):
                 factor_stats[reason]["n"] += 1
                 if is_win:

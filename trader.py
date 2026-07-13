@@ -27,7 +27,7 @@ WATCHLIST = [
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
-MIN_SCORE   = 6       # minimum confluence (max 8)
+MIN_SCORE   = 7       # minimum confluence (max 8)
 MIN_ADX     = 30      # ADX bonus threshold (hard gate is 25 below); reverted from rogue 40 on 2026-07-10
 TP_RATIO    = 2.0         # 1:2 RR minimum — aligns with score_setup qualification logic
 RISK_PCT    = 0.01
@@ -117,7 +117,7 @@ def get_macro_trend(coin, current_tf="1h"):
 
 def score_setup(df, direction, macro_trend=0):
     """
-    CM Sling Shot scoring. Max 8 pts. Fire at >= MIN_SCORE (6).
+    CM Sling Shot scoring. Max 8 pts. Fire at >= MIN_SCORE (7).
     Scoring: cloud(2) + entry type(1-2) + 4H alignment(0-2) + ADX(1) + cloud width(1)
     Returns (score, reasons, sl, tp, leverage, sl_pct, tp_pct)
     """
