@@ -20,7 +20,6 @@ WATCHLIST = [
     "AVAX",
     "ATOM",
     "OP",
-    "RUNE",
     "BNB",
     "APT",
     "DOGE"
