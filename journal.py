@@ -89,8 +89,8 @@ def get_today_summary():
     today_signals = [s for s in data["signals"]
                      if s["time"][:10] == today]
 
-    wins    = [t for t in today_trades if t["result"] == "tp" and (t["lev_pct"] or 0) > 0]
-    losses  = [t for t in today_trades if t["result"] == "sl" and (t["lev_pct"] or 0) < 0]
+    wins    = [t for t in today_trades if (t.get("lev_pct") or 0) > 0]
+    losses  = [t for t in today_trades if (t.get("lev_pct") or 0) < 0]
     decided = len(wins) + len(losses)
     total_lev = sum(t["lev_pct"] or 0 for t in today_trades)
 
@@ -115,8 +115,8 @@ def get_week_summary():
     if not trades:
         return None
 
-    wins    = [t for t in trades if t["result"] == "tp" and (t["lev_pct"] or 0) > 0]
-    losses  = [t for t in trades if t["result"] == "sl" and (t["lev_pct"] or 0) < 0]
+    wins    = [t for t in trades if (t.get("lev_pct") or 0) > 0]
+    losses  = [t for t in trades if (t.get("lev_pct") or 0) < 0]
     decided = len(wins) + len(losses)
     total_r = sum(t["lev_pct"] or 0 for t in trades)
 

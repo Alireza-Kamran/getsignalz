@@ -300,9 +300,14 @@ def run():
                 s = quick_state(coin, TF)
                 if s:
                     states.append(s)
-                    sig = f"  ◄ SIGNAL {s['best_score']}/8" if s["best_score"] >= MIN_SCORE else ""
+                    if s["best_score"] >= MIN_SCORE:
+                        score_tag = f"  ◄ SIGNAL {s['best_score']}/8"
+                    elif s["best_score"] > 0:
+                        score_tag = f"  [{s['best_score']}/8]"
+                    else:
+                        score_tag = ""
                     logger.info(f"{coin:<6} ${s['price']:.4f}  RSI {s['rsi']:.0f}  "
-                                f"ADX {s['adx']:.0f}  SSL {s['ssl']:+d}{sig}")
+                                f"ADX {s['adx']:.0f}  SSL {s['ssl']:+d}{score_tag}")
             # Scan summary stays in logs only — no channel post
 
             # ── Skip trading if off-session ───────────────────────────────────

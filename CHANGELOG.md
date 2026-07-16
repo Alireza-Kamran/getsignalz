@@ -13,6 +13,18 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.14.0 — 2026-07-16
+
+**Stats:** 62 trades · WR: 38% · P&L: +204.8%
+
+**Code improvements (4):**
+- live.py: During signal droughts every candle log shows only RSI/ADX/SSL with no indication of how close each coin is to a signal. Adding '[6/8]' for near-misses immediately distinguishes 'ADX too low so score=0' from 'coin scored 6, one factor short of MIN_SCORE=7' — enabling correct diagnosis without manual indicator inspection.
+- journal.py: Trailing-stop exits are stored as result='sl' with positive lev_pct. The result=='tp' filter silently drops every trail-win from the daily review W count, showing an understated WR in the channel. Matches the fix already applied in tracker.py close_position which uses lev_pct>0 as the authoritative win definition.
+- journal.py: Same trail-win misclassification bug in get_week_summary — weekly review WR, avg_win, and avg_loss shown in the channel are all wrong whenever trailing stops exit profitably. Also fixes the win_reasons / loss_reasons signal attribution so the 'Best signals' section correctly includes trail-wins when identifying which confluence factors actually performed.
+- tracker.py: RUNE was removed from WATCHLIST on 2026-07-10, reducing the watched coins from 14 to 13. The pinned dashboard has shown a stale count for 6 days.
+
+---
+
 ## v1.13.2 — 2026-07-15
 
 **Stats:** 62 trades · WR: 38% · P&L: +204.8%

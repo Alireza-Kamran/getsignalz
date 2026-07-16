@@ -265,7 +265,7 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
         f"{open_section}\n\n"
         f"{bal_section}\n\n"
         f"{stats_section}\n\n"
-        f"🔬 Testnet mode  ·  1h candles  ·  14 pairs\n"
+        f"🔬 Testnet mode  ·  1h candles  ·  13 pairs\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Updated {now}</i>"
     )
