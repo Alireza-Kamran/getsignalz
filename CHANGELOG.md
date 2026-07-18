@@ -13,6 +13,15 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.15.0 — 2026-07-18
+
+**Stats:** 64 trades · WR: 40% · P&L: +216.5%
+
+**Code improvements (1):**
+- executor.py: query_order_by_oid likely throws AttributeError in the current HL SDK, so the except block fires on every SL trail update. With pass, execution falls through to exchange.cancel() and removes ALL reduce-only orders including the resting TP — leaving positions unprotected at 1:1R and 1.5:1R trail stages. With continue, an unidentifiable order is skipped: the worst outcome is a stale wide-SL order that never triggers (the tighter new SL fires first), whereas the current worst outcome is silently deleting the TP and letting a winning position reverse through breakeven.
+
+---
+
 ## v1.14.1 — 2026-07-17
 
 **Stats:** 63 trades · WR: 39% · P&L: +205.2%

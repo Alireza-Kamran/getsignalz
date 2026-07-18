@@ -284,7 +284,7 @@ def update_sl(coin, direction, sz, new_sl, entry=None):
                     if direction == 1 and trig > entry:
                         continue  # LONG TP is above entry — preserve
                 except Exception:
-                    pass  # if query fails, cancel it (safe fallback)
+                    continue  # if query fails, preserve unknown order — redundant SL is harmless, lost TP is not
             exchange.cancel(coin, o["oid"])
     except Exception as e:
         logger.warning(f"Could not cancel old orders: {e}")
