@@ -50,9 +50,9 @@ def _check_trail(positions, account_val, mids=None):
         if past_tp:
             continue
 
-        # Use original R derived from TP (TP = entry ± 2R) so risk stays
+        # Use original R derived from TP (TP = entry ± TP_RATIO*R) so risk stays
         # correct even after SL is moved to breakeven (where entry-sl = 0)
-        risk  = abs(tp - entry) / 2.0
+        risk  = abs(tp - entry) / TP_RATIO
         favor = (price - entry) * direction  # positive only when trade is in profit
 
         # At 1:1 — move SL to breakeven
@@ -98,7 +98,14 @@ def _check_closed(positions, account_val):
             logger.info(f"CLOSED {coin} | {'+' if lev_pct>0 else ''}{lev_pct:.1f}% | {hit.upper()}")
             log_trade_close(coin, exit_px, hit, lev_pct, dur)
             if hit == "sl":
-                _cooldown_until[coin] = int(time.time()) + 10800
+                _expiry = int(time.time()) + 10800
+                _cooldown_until[coin] = _expiry
+                try:
+                    _s = tracker.load_state()
+                    _s.setdefault("cooldowns", {})[coin] = _expiry
+                    tracker.save_state(_s)
+                except Exception:
+                    pass
             max_adverse = t.get("max_adverse_pct", 0.0)
             stats = tracker.close_position(coin, exit_px, hit, lev_pct, balance_before, balance_after)
 
@@ -242,6 +249,16 @@ def run():
     except Exception as e:
         logger.warning(f"Could not restore trades: {e}")
 
+    try:
+        _cd = tracker.load_state().get("cooldowns", {})
+        _now_ts = int(time.time())
+        for _c, _exp in _cd.items():
+            if _now_ts < _exp:
+                _cooldown_until[_c] = _exp
+        if _cooldown_until:
+            logger.info(f"Restored cooldowns: {list(_cooldown_until.keys())}")
+    except Exception as _e:
+        logger.warning(f"Could not restore cooldowns: {_e}")
     tg.dm_owner(f"⚡️ Bot started — {len(WATCHLIST)} pairs | restored {len(_open_trades)} open trades")
 
     last_candle = 0
