@@ -37,6 +37,11 @@ PROTECTED_STRINGS = [_PK, _ACCT]
 
 MAX_CHANGES = 12
 
+# Structural max of score_setup() in trader.py (CM Sling Shot: cloud 2 + entry 2 +
+# 4H 2 + ADX 1 + cloud-width 1). Not a tunable — only changes if scoring itself
+# is restructured, unlike MIN_SCORE which strategy_config.json controls nightly.
+MAX_SCORE = 8
+
 # Full brain runs (~37K-token prompt + detailed JSON reply) legitimately take
 # ~5 min; 300s left no headroom and tripped on heavier nights. 10 min is safe.
 BRAIN_TIMEOUT = 600
@@ -57,8 +62,23 @@ def _recent_logs(n: int = 150) -> str:
 def _build_prompt() -> str:
     parts = []
 
+    # Load config/state/journal FIRST so the instructions below can reference
+    # live values instead of a frozen snapshot from whatever regime was current
+    # when this prompt was last hand-edited.
+    try:
+        state   = json.loads(_read("state.json"))
+        journal = json.loads(_read("journal.json"))
+        config  = json.loads(_read("strategy_config.json"))
+        stats   = state.get("stats", {})
+        trades  = [t for t in journal.get("trades", []) if t.get("result")]
+        signals = journal.get("signals", [])
+    except Exception as e:
+        state, journal, config, stats, trades, signals = {}, {}, {}, {}, [], []
+
+    current_min_score = config.get("min_score", 7)
+
     # ── Instructions ──────────────────────────────────────────────────────────
-    parts.append("""
+    parts.append(f"""
 You are the nightly AI brain of a Hyperliquid perpetuals trading bot called GetSignalz.
 You receive the complete project source code, trade history, and performance data.
 Your job: improve the bot every night by proposing concrete, validated code changes.
@@ -78,25 +98,28 @@ SAFETY RULES — never break these:
 - Never break state.json structure (tracked / closed_trades / stats)
 - No blocking calls or sleep() in the main trading loop
 - Changes must be surgical — targeted replacements, not full rewrites
-- NEVER raise MIN_SCORE based on blended win rate. This is the most important rule.
-  Per-score EV (stable across 9 sessions): Score 8 = WR 50%, avg +31.8% (BEST EV).
-  Score 9 = WR 20%, avg +8.7%. Score 10 = WR 0%, avg +4.6% (trail only).
-  Overall WR=31% mixes all bands and is meaningless for this decision.
-  MIN_SCORE=8 is set by deliberate nightly self-learn. DO NOT change it.
+- NEVER raise MIN_SCORE based on blended overall win rate — that number mixes every
+  scoring regime this bot has ever run and is meaningless for this decision. Only act
+  on a MIN_SCORE change if you compute per-score EV fresh from the LAST 25 TRADES /
+  LAST 20 SIGNALS data below (or ask for more history) and the current regime's own
+  bands separate cleanly, with n≥5 trades in the bands being compared.
+- Current MIN_SCORE is {current_min_score} (read live from strategy_config.json,
+  max achievable score is {MAX_SCORE}) — this is set by the nightly self-learn
+  process, not by you unilaterally; only change it with the fresh evidence above.
 
 OUTPUT — respond with ONLY raw JSON (no markdown, no code fences):
-{
+{{
   "analysis": "2-4 sentences: current state assessment and key improvement opportunity",
   "changes": [
-    {
+    {{
       "file": "trader.py",
       "old": "exact string currently in file (copy-paste precise)",
       "new": "replacement string (valid Python)",
       "reason": "specific reason this makes the bot better"
-    }
+    }}
   ],
   "summary": "one paragraph for the channel owner: what you changed and the expected impact"
-}
+}}
 
 Rules for "old" field:
 - Must be an EXACT copy of text currently in the file — character-for-character
@@ -109,16 +132,8 @@ Rules for "old" field:
     parts.append("PERFORMANCE DATA")
     parts.append("=" * 70)
 
-    try:
-        state   = json.loads(_read("state.json"))
-        journal = json.loads(_read("journal.json"))
-        config  = json.loads(_read("strategy_config.json"))
-        stats   = state.get("stats", {})
-        trades  = [t for t in journal.get("trades", []) if t.get("result")]
-        signals = journal.get("signals", [])
-    except Exception as e:
-        state, journal, config, stats, trades, signals = {}, {}, {}, {}, [], []
-        parts.append(f"[data load error: {e}]")
+    if not state and not journal:
+        parts.append("[data load error — state.json/journal.json unavailable]")
 
     parts.append(f"Total closed trades : {len(trades)}")
     parts.append(f"Win rate            : {stats.get('win_rate', 0):.1f}%")
@@ -141,7 +156,7 @@ Rules for "old" field:
     parts.append("\nLAST 20 SIGNALS (for confluence quality analysis):")
     for s in signals[-20:]:
         parts.append(
-            f"  {s.get('coin','?'):<8}  score={s.get('score',0)}/14  "
+            f"  {s.get('coin','?'):<8}  score={s.get('score',0)}/{MAX_SCORE}  "
             f"adx={s.get('adx',0):.0f}  rsi={s.get('rsi',0):.0f}  "
             f"reasons={s.get('reasons',[])}"
         )

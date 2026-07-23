@@ -7,6 +7,7 @@ Everything else stays in logs or DM.
 import json, os
 from datetime import datetime, timezone
 from journal import get_today_summary, get_week_summary, compact
+from analyze import health_score
 import tg
 from config import TELEGRAM_TOKEN as TOKEN, TELEGRAM_CHANNEL as CHANNEL
 
@@ -422,6 +423,12 @@ def weekly_review():
     w_sig = "\n".join(f"  · {r} ({c}x)" for r, c in s["top_win_signals"]) or "  · —"
     l_sig = "\n".join(f"  · {r} ({c}x)" for r, c in s["top_loss_signals"]) or "  · —"
 
+    try:
+        trust = health_score(save=True)["total"]
+        trust_line = f"🏆 Trust Score: <b>{trust}/100</b>\n"
+    except Exception:
+        trust_line = ""
+
     msg = (
         f"📅 <b>Weekly Review — {now}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -430,6 +437,7 @@ def weekly_review():
         f"📈 Avg win: <b>+{s['avg_win']:.1f}%</b>  ·  "
         f"📉 Avg loss: <b>{s['avg_loss']:.1f}%</b>\n"
         f"{tot_e} Week total: <b>{'+' if s['total_lev_pct']>=0 else ''}{s['total_lev_pct']:.1f}%</b>\n"
+        f"{trust_line}"
         f"\n✅ Best signals:\n{w_sig}\n"
         f"❌ Signals in losses:\n{l_sig}"
     )

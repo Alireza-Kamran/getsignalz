@@ -156,6 +156,186 @@ def full_report():
     return "\n".join(lines)
 
 
+# ── Trust Score ──────────────────────────────────────────────────────────────
+# A single 0-100 number answering "how much has this bot actually earned our
+# trust so far" — five pillars, each computed from data already logged
+# elsewhere (journal.json, state.json, CHANGELOG.md, selflearn.log, bot.log).
+# No new tracking required. Cached briefly since this gets called from the
+# live dashboard-refresh hot path (tracker.py), which can fire every ~60s.
+
+CHANGELOG_F  = "/root/trade/CHANGELOG.md"
+SELFLEARN_F  = "/root/trade/selflearn.log"
+BOTLOG_F     = "/root/trade/bot.log"
+
+_health_cache = {"time": None, "result": None}
+_HEALTH_TTL_S = 900  # 15 min
+
+
+def _edge_confidence(journal, config):
+    """Pillar 1 (40 pts): sample size + sign of EV in the core edge band (score >= MIN_SCORE)."""
+    min_score = config.get("min_score", 7)
+    trades = [t for t in journal.get("trades", []) if t.get("result")]
+    signals = journal.get("signals", [])
+
+    qualifying = []
+    for t in trades:
+        sig = next((s for s in signals
+                    if s["coin"] == t["coin"] and s["time"][:10] == t["open_time"][:10]), None)
+        score = sig["score"] if sig else 0
+        if score >= min_score:
+            qualifying.append(t)
+
+    n = len(qualifying)
+    avg_pct = sum(t.get("lev_pct", 0) or 0 for t in qualifying) / n if n else 0.0
+
+    sample_pts = min(n, 20) / 20 * 25
+    edge_pts   = 15.0 if (n >= 5 and avg_pct > 0) else 0.0
+    return round(sample_pts + edge_pts, 1), {"n": n, "avg_pct": round(avg_pct, 1)}
+
+
+def _risk_control(journal, state):
+    """Pillar 2 (20 pts): current drawdown containment + no MAX_LEV_LOSS breaches."""
+    stats = state.get("stats", {})
+    current_dd = stats.get("current_drawdown_pct", 0.0)
+
+    dd_pts = max(0.0, 15 * (1 - current_dd / 40))
+    dd_pts = min(dd_pts, 15.0)
+
+    trades = journal.get("trades", [])
+    breach = any(abs(t.get("lev_pct") or 0) > 26 for t in trades)
+    breach_pts = 0.0 if breach else 5.0
+
+    return round(dd_pts + breach_pts, 1), {"current_drawdown_pct": current_dd, "cap_breach": breach}
+
+
+def _system_reliability():
+    """Pillar 3 (20 pts): nightly cron health (last 7 sessions) + recent bot.log cleanliness."""
+    cron_pts = 10.0
+    try:
+        with open(SELFLEARN_F) as f:
+            text = f.read()
+        sessions = text.split("SELF-LEARN: ")[1:][-7:]
+        if sessions:
+            bad = sum(1 for s in sessions if any(
+                m in s for m in ("FATAL", "command not found", "OAuth session expired",
+                                  "Failed to authenticate")))
+            cron_pts = round((1 - bad / len(sessions)) * 10, 1)
+    except FileNotFoundError:
+        pass
+
+    log_pts = 10.0
+    try:
+        with open(BOTLOG_F) as f:
+            recent = f.readlines()[-3000:]
+        bad_lines = sum(1 for l in recent if "Traceback" in l or "Ghost close" in l)
+        log_pts = max(0.0, 10 - bad_lines * 2)
+    except FileNotFoundError:
+        pass
+
+    return round(cron_pts + log_pts, 1), {"cron_pts": cron_pts, "log_pts": log_pts}
+
+
+def _strategy_stability():
+    """Pillar 4 (10 pts): days since the last CHANGELOG entry flagged as a critical fix/rogue bug."""
+    try:
+        with open(CHANGELOG_F) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return 10.0, {"days_since_critical": None}
+
+    import re
+    entries = re.findall(r"## v[\d.]+\s*[—-]+\s*(\d{4}-\d{2}-\d{2}).*?(?=\n## v|\Z)", text, re.DOTALL)
+    critical_dates = []
+    for block in re.finditer(r"## v[\d.]+\s*[—-]+\s*(\d{4}-\d{2}-\d{2})(.*?)(?=\n## v|\Z)", text, re.DOTALL):
+        date_str, body = block.groups()
+        if re.search(r"critical fix|root cause", body, re.IGNORECASE):
+            critical_dates.append(date_str)
+
+    if not critical_dates:
+        return 10.0, {"days_since_critical": None}
+
+    most_recent = max(critical_dates)
+    days_since = (datetime.utcnow().date() - datetime.strptime(most_recent, "%Y-%m-%d").date()).days
+    pts = round(10 * min(days_since / 14, 1), 1)
+    return pts, {"days_since_critical": days_since, "last_critical_date": most_recent}
+
+
+def _watchlist_health(journal, config):
+    """Pillar 5 (10 pts): no active-watchlist coin sitting past its removal bar, plus data coverage."""
+    watchlist = config.get("watchlist", [])
+    trades = [t for t in journal.get("trades", []) if t.get("result")]
+
+    coin_n = defaultdict(int)
+    coin_wins = defaultdict(int)
+    coin_pct = defaultdict(float)
+    for t in trades:
+        c = t["coin"]
+        coin_n[c] += 1
+        coin_wins[c] += 1 if (t.get("lev_pct") or 0) > 0 else 0
+        coin_pct[c] += t.get("lev_pct", 0) or 0
+
+    overdue = [c for c in watchlist
+               if coin_n[c] >= 5 and coin_wins[c] == 0 and coin_pct[c] < 0]
+    overdue_pts = 0.0 if overdue else 6.0
+
+    covered = sum(1 for c in watchlist if coin_n[c] >= 3)
+    coverage_pts = round(4 * (covered / len(watchlist)), 1) if watchlist else 0.0
+
+    return round(overdue_pts + coverage_pts, 1), {"overdue_removal": overdue, "coverage": f"{covered}/{len(watchlist)}"}
+
+
+def health_score(force=False, save=False):
+    """Compute the 0-100 Trust Score. Cached 15 min unless force=True.
+    If save=True, appends the result to journal.json's `reviews` list."""
+    now = datetime.utcnow()
+    if not force and _health_cache["time"] and (now - _health_cache["time"]).total_seconds() < _HEALTH_TTL_S:
+        return _health_cache["result"]
+
+    journal = load_journal()
+    state   = load_state()
+    config  = load_config()
+
+    p1, d1 = _edge_confidence(journal, config)
+    p2, d2 = _risk_control(journal, state)
+    p3, d3 = _system_reliability()
+    p4, d4 = _strategy_stability()
+    p5, d5 = _watchlist_health(journal, config)
+
+    total = round(p1 + p2 + p3 + p4 + p5)
+
+    result = {
+        "time": now.isoformat(),
+        "total": total,
+        "pillars": {
+            "edge_confidence":     {"points": p1, "max": 40, **d1},
+            "risk_control":        {"points": p2, "max": 20, **d2},
+            "system_reliability":  {"points": p3, "max": 20, **d3},
+            "strategy_stability":  {"points": p4, "max": 10, **d4},
+            "watchlist_health":    {"points": p5, "max": 10, **d5},
+        },
+    }
+
+    _health_cache["time"]   = now
+    _health_cache["result"] = result
+
+    if save:
+        try:
+            import journal as journal_mod
+            journal_mod.log_review(result)
+        except Exception as e:
+            print(f"[analyze] health_score save error: {e}")
+
+    return result
+
+
+def format_health_score(result=None) -> str:
+    r = result or health_score()
+    lines = [f"🏆 Trust Score: {r['total']}/100", ""]
+    for name, p in r["pillars"].items():
+        lines.append(f"  {name.replace('_',' ').title():<20} {p['points']:.1f}/{p['max']}")
+    return "\n".join(lines)
+
+
 def apply_config_to_trader():
     """
     Read strategy_config.json and apply values to trader.py.

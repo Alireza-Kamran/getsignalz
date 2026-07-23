@@ -149,6 +149,16 @@ def get_week_summary():
     }
 
 
+def log_review(entry: dict):
+    """Append a Trust Score (or other periodic review) result to the journal.
+    Keeps only the last 200 to bound file growth — this is a trend log, not
+    a full audit trail (CHANGELOG.md and the deep memory file cover that)."""
+    data = _load()
+    data.setdefault("reviews", []).append(entry)
+    data["reviews"] = data["reviews"][-200:]
+    _save(data)
+
+
 def compact(keep_days=30):
     """Remove signals older than keep_days to save memory."""
     data    = _load()

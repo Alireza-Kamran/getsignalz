@@ -13,6 +13,20 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.17.0 — 2026-07-23
+
+**Stats:** 68 trades · WR: 33% · P&L: +205.1%
+
+**Code improvements (6):**
+- tracker.py: dashboard's pair count was hardcoded ("13 pairs") — this exact bug class has already recurred twice before (14→13, 15→14 stale counts), and regressed again after tonight's BNB removal. Now derives from `len(WATCHLIST)` so it can't go stale again.
+- ai_brain.py: the nightly AI code-improvement prompt was reasoning from a stale, wrong snapshot — hardcoded `MIN_SCORE=8 ... DO NOT change it` (real value is 7) and an EV table from the pre-06-25 scoring system, plus a `score/14` display when the real max is 8. Now reads MIN_SCORE live from strategy_config.json and instructs the AI to compute fresh EV from actual journal data instead of trusting a frozen example.
+- Removed `claude_brain.py` and `runner.py` — both dead code, confirmed unreferenced anywhere (grep across all `.py`/`.sh`, cron, and the systemd unit). `claude_brain.py` was already marked superseded in `.gitignore`; `runner.py` predates `live.py` and imports functions that no longer exist.
+- Wired up `result_card.py` (a fully-built, previously-unused Hyperliquid-style PnL card generator) into `tracker.py`'s close flow — closed trades now post a polished visual card to the channel alongside the existing text notification, via a new `_send_photo()` helper. Wrapped in try/except so a card failure can never block the text close notification.
+- backtest.py rebuilt from scratch: the old version tested a completely different, no-longer-live scoring system (OB/RSI/SSL/UT-Bot/FVG combos, pre-06-25). It now walks historical candles through the actual live `trader.build_df()`/`score_setup()` directly — no reimplemented logic to drift out of sync — turning "wait weeks for live n≥5 per bucket" into a same-day historical read across months of data. Verified against ETH/SOL: all simulated trades correctly bracket entry/SL/TP by direction and respect TP_RATIO.
+- New Trust Score (0-100) in analyze.py: five-pillar composite (statistical edge confidence, risk control, system reliability, strategy stability, watchlist health) computed from data already logged (journal.json, state.json, CHANGELOG.md, selflearn.log, bot.log). Surfaced on the pinned dashboard and in the weekly review post; history saved to journal.json's previously-unused `reviews` list.
+
+---
+
 ## v1.16.0 — 2026-07-23
 
 **Stats:** 68 trades · WR: 33% · P&L: +205.1%

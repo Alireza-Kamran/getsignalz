@@ -1,259 +1,149 @@
-import numpy as np
+"""
+Backtest engine — walks historical candles through the LIVE trader.py strategy.
+
+No scoring/indicator logic is reimplemented here: this calls trader.build_df()
+and trader.score_setup() directly, so a backtest run always tests exactly what
+the live bot would have signaled, and automatically stays in sync whenever
+trader.py's strategy changes (no separate copy to keep updated by hand).
+
+This replaces the old backtest.py, which tested a completely different, no
+longer live scoring system (OB/RSI/SSL/UT-Bot/FVG combos, pre-2026-06-25
+CM Sling Shot rebuild) — its numbers had no relationship to what the bot
+actually trades today.
+
+Known simplifications (documented, not hidden):
+- Same-bar SL+TP ambiguity: if a single candle's range covers both, SL is
+  assumed to fill first (conservative/worst-case, not optimistic).
+- One open trade at a time PER COIN is modeled, not a true cross-coin
+  MAX_TRADES gate — a real portfolio walk would need to interleave every
+  coin on a shared timeline. This means backtested trade frequency is an
+  upper bound vs. live, where a position in one coin can block a signal
+  in another. Score-band/coin EV comparisons are still valid; raw trade
+  count should be read as "how often does this setup qualify," not "how
+  many the live bot would actually take."
+- No slippage/fee modeling — same idealized SL/TP-price basis the nightly
+  memory session already uses when hand-computing EV from journal.json.
+- Bounded by whatever historical depth Hyperliquid testnet's candle API
+  actually returns (typically a few months on 1h) — a large, fast sample
+  for hypothesis-testing, not a multi-year statistical guarantee.
+"""
 import pandas as pd
-import time
-from indicators import fetch_candles, rsi, atr, ut_bot, ssl_channel, order_blocks, fvg, atr_rsi_sl
+from trader import build_df, score_setup, WATCHLIST, MIN_SCORE, TP_RATIO
+from indicators import sling_shot, fetch_candles
 
 
-def run_backtest(df, signals, tp_ratio=2.0, use_atr_sl=True):
+def _macro_series(coin, base_tf, base_index):
+    """Higher-TF (4h/1d) Sling Shot cloud direction, as-of each base-tf timestamp.
+
+    Mirrors trader.get_macro_trend() but vectorized across the whole backtest
+    window instead of one live API call — same source data, no lookahead
+    (each base-tf bar only ever sees higher-TF bars already closed by then).
     """
-    Simulate trades on historical data.
-    signals: boolean Series, True = enter trade
-    direction: 1 = long, -1 = short
-    Returns stats dict.
-    """
+    macro_tf = "4h" if base_tf in ("1h", "15m") else "1d"
+    df4 = fetch_candles(coin, macro_tf, lookback_bars=1500)
+    if df4 is None or len(df4) < 100:
+        return pd.Series(0, index=base_index)
+    ss_fast, ss_slow, *_ = sling_shot(df4["close"])
+    macro = pd.Series(0, index=df4.index)
+    macro[ss_fast > ss_slow] = 1
+    macro[ss_fast < ss_slow] = -1
+    return macro.reindex(base_index, method="ffill").fillna(0).astype(int)
+
+
+def backtest_coin(coin, tf="1h", bars=1500):
+    """Walk every historical bar of `coin`/`tf` through the live score_setup(),
+    simulate SL/TP fills. Returns a list of simulated trade dicts."""
+    df = build_df(coin, tf, bars=bars)
+    if df is None or len(df) < 50:
+        return []
+
+    macro = _macro_series(coin, tf, df.index)
+
     trades = []
-    in_trade = False
+    in_trade = None
 
-    for i in range(len(df)):
+    for i in range(1, len(df)):
+        sub = df.iloc[:i + 1]
+        row = df.iloc[i]
+
         if in_trade:
-            row = df.iloc[i]
-            if direction == 1:
-                if row["low"] <= sl:
-                    trades.append({"pnl_r": -1.0, "win": False})
-                    in_trade = False
-                elif row["high"] >= tp:
-                    trades.append({"pnl_r": tp_ratio, "win": True})
-                    in_trade = False
-            else:
-                if row["high"] >= sl:
-                    trades.append({"pnl_r": -1.0, "win": False})
-                    in_trade = False
-                elif row["low"] <= tp:
-                    trades.append({"pnl_r": tp_ratio, "win": True})
-                    in_trade = False
+            direction = in_trade["direction"]
+            hit_sl = (row["real_low"] <= in_trade["sl"]) if direction == 1 else (row["real_high"] >= in_trade["sl"])
+            hit_tp = (row["real_high"] >= in_trade["tp"]) if direction == 1 else (row["real_low"] <= in_trade["tp"])
+            if hit_sl:
+                trades.append({**in_trade, "exit": in_trade["sl"], "result": "sl", "close_time": row.name})
+                in_trade = None
+            elif hit_tp:
+                trades.append({**in_trade, "exit": in_trade["tp"], "result": "tp", "close_time": row.name})
+                in_trade = None
             continue
 
-        sig = signals.iloc[i]
-        if sig == 0 or sig is None:
-            continue
+        macro_dir = int(macro.loc[row.name]) if row.name in macro.index else 0
 
-        direction = int(sig)
-        entry = df.iloc[i]["close"]
-        a = df.iloc[i]["atr"]
+        for direction in (1, -1):
+            score, reasons, sl, tp, leverage, sl_pct, tp_pct = score_setup(sub, direction, macro_dir)
+            if score >= MIN_SCORE:
+                in_trade = {
+                    "coin": coin, "tf": tf, "direction": direction, "score": score,
+                    "reasons": reasons, "entry": row["real_close"], "sl": sl, "tp": tp,
+                    "leverage": leverage, "open_time": row.name,
+                }
+                break
 
-        # SL based on ATR x RSI from strategy
-        if direction == 1:
-            sl = df.iloc[i]["sl_long"]
-            if pd.isna(sl) or sl >= entry:
-                sl = entry - 1.5 * a
-        else:
-            sl = df.iloc[i]["sl_short"]
-            if pd.isna(sl) or sl <= entry:
-                sl = entry + 1.5 * a
+    return trades
 
-        risk = abs(entry - sl)
-        if risk <= 0:
-            continue
 
-        tp = entry + direction * risk * tp_ratio
-        in_trade = True
+def run_full_backtest(coins=None, timeframes=("1h",), bars=1500):
+    """Backtest the full watchlist (or a subset). Returns a flat list of trades."""
+    coins = coins or WATCHLIST
+    all_trades = []
+    for coin in coins:
+        for tf in timeframes:
+            try:
+                all_trades.extend(backtest_coin(coin, tf, bars))
+            except Exception as e:
+                print(f"[backtest] {coin}/{tf} error: {e}")
+    return all_trades
 
+
+def _r_pct(t):
+    """Leveraged % outcome for one simulated trade, same basis as live signal SL/TP prices."""
+    raw = (t["tp"] - t["entry"]) / t["entry"] if t["result"] == "tp" else (t["sl"] - t["entry"]) / t["entry"]
+    return raw * 100 * t["direction"] * t["leverage"]
+
+
+def summarize(trades):
+    """Score-band + per-coin EV breakdown — same framework the nightly deep
+    self-learn session already uses when reading live journal.json by hand."""
     if not trades:
-        return None
+        return "No trades simulated."
 
-    wins = sum(1 for t in trades if t["win"])
-    total = len(trades)
-    total_r = sum(t["pnl_r"] for t in trades)
-    avg_win_r = np.mean([t["pnl_r"] for t in trades if t["win"]]) if wins > 0 else 0
-    avg_loss_r = np.mean([t["pnl_r"] for t in trades if not t["win"]]) if (total - wins) > 0 else 0
+    df = pd.DataFrame(trades)
+    df["r_pct"] = df.apply(_r_pct, axis=1)
 
-    return {
-        "trades": total,
-        "wins": wins,
-        "win_rate": wins / total * 100,
-        "total_r": total_r,
-        "profit_factor": (wins * avg_win_r) / max(abs((total - wins) * avg_loss_r), 0.001),
-        "avg_r": total_r / total,
-    }
+    lines = [f"Total simulated trades: {len(df)}", ""]
 
+    lines.append(f"── BY SCORE (MIN_SCORE={MIN_SCORE}, TP_RATIO={TP_RATIO}) ──")
+    for score, g in sorted(df.groupby("score"), key=lambda x: x[0]):
+        wr = (g["result"] == "tp").mean() * 100
+        lines.append(f"  Score {score}: n={len(g):<4} WR={wr:5.1f}%  avg={g['r_pct'].mean():+6.1f}%")
 
-def build_signals(df, combo):
-    """Build signal series based on combination name."""
-    sig = pd.Series(0, index=df.index)
+    lines.append(f"\n── BY COIN (score >= {MIN_SCORE} only) ──")
+    qual = df[df["score"] >= MIN_SCORE]
+    if qual.empty:
+        lines.append("  (no qualifying trades at current MIN_SCORE)")
+    else:
+        for coin, g in sorted(qual.groupby("coin"), key=lambda x: -x[1]["r_pct"].mean()):
+            wr = (g["result"] == "tp").mean() * 100
+            lines.append(f"  {coin:<6} n={len(g):<4} WR={wr:5.1f}%  avg={g['r_pct'].mean():+6.1f}%")
 
-    if combo == "ob_rsi":
-        # Your core strategy: OB + RSI
-        long = df["bull_ob"] & (df["rsi"] <= 30)
-        short = df["bear_ob"] & (df["rsi"] >= 70)
-        sig[long] = 1
-        sig[short] = -1
-
-    elif combo == "ob_rsi_ssl":
-        # OB + RSI + SSL trend filter
-        long = df["bull_ob"] & (df["rsi"] <= 30) & (df["ssl"] == 1)
-        short = df["bear_ob"] & (df["rsi"] >= 70) & (df["ssl"] == -1)
-        sig[long] = 1
-        sig[short] = -1
-
-    elif combo == "ob_rsi_ssl_ut":
-        # OB + RSI + SSL + UT Bot confirmation
-        long = df["bull_ob"] & (df["rsi"] <= 30) & (df["ssl"] == 1) & (df["ut_buy"])
-        short = df["bear_ob"] & (df["rsi"] >= 70) & (df["ssl"] == -1) & (df["ut_sell"])
-        sig[long] = 1
-        sig[short] = -1
-
-    elif combo == "ut_ssl":
-        # UT Bot signal in SSL trend direction
-        long = df["ut_buy"] & (df["ssl"] == 1)
-        short = df["ut_sell"] & (df["ssl"] == -1)
-        sig[long] = 1
-        sig[short] = -1
-
-    elif combo == "ut_only":
-        # Pure UT Bot signals
-        sig[df["ut_buy"]] = 1
-        sig[df["ut_sell"]] = -1
-
-    elif combo == "ssl_flip":
-        # Trade SSL trend flips
-        long = (df["ssl"] == 1) & (df["ssl"].shift(1) == -1)
-        short = (df["ssl"] == -1) & (df["ssl"].shift(1) == 1)
-        sig[long] = 1
-        sig[short] = -1
-
-    elif combo == "fvg_rsi":
-        # FVG + RSI
-        long = df["fvg_bull"] & (df["rsi"] <= 45)
-        short = df["fvg_bear"] & (df["rsi"] >= 55)
-        sig[long] = 1
-        sig[short] = -1
-
-    elif combo == "ob_ssl_struct":
-        # OB + SSL + Market Structure alignment
-        long = df["bull_ob"] & (df["ssl"] == 1) & (df["struct"] == 1)
-        short = df["bear_ob"] & (df["ssl"] == -1) & (df["struct"] == 0)
-        sig[long] = 1
-        sig[short] = -1
-
-    elif combo == "rsi_extreme_ssl":
-        # RSI extreme (25/75) + SSL trend
-        long = (df["rsi"] <= 25) & (df["ssl"] == 1)
-        short = (df["rsi"] >= 75) & (df["ssl"] == -1)
-        sig[long] = 1
-        sig[short] = -1
-
-    elif combo == "full_confluence":
-        # All signals aligned (strictest)
-        long = (df["bull_ob"] | df["ut_buy"]) & (df["rsi"] <= 40) & (df["ssl"] == 1) & (df["struct"] == 1)
-        short = (df["bear_ob"] | df["ut_sell"]) & (df["rsi"] >= 60) & (df["ssl"] == -1) & (df["struct"] == 0)
-        sig[long] = 1
-        sig[short] = -1
-
-    return sig
-
-
-def investigate(symbol="ETH", timeframes=["1h", "4h"], tp_ratios=[1.5, 2.0, 2.5]):
-    combos = [
-        "ob_rsi",
-        "ob_rsi_ssl",
-        "ob_rsi_ssl_ut",
-        "ut_ssl",
-        "ut_only",
-        "ssl_flip",
-        "fvg_rsi",
-        "ob_ssl_struct",
-        "rsi_extreme_ssl",
-        "full_confluence",
-    ]
-
-    all_results = []
-
-    for tf in timeframes:
-        print(f"\nFetching {symbol} {tf} data...")
-        bars = 500 if tf == "1h" else 300 if tf == "4h" else 600
-        df = fetch_candles(symbol, tf, lookback_bars=bars)
-        print(f"  Got {len(df)} bars ({df.index[0].date()} to {df.index[-1].date()})")
-
-        # Calculate all indicators
-        df["rsi"] = rsi(df["close"])
-        df["atr"] = atr(df["high"], df["low"], df["close"])
-        ut_buy_s, ut_sell_s, _ = ut_bot(df["close"], df["high"], df["low"])
-        df["ut_buy"] = ut_buy_s
-        df["ut_sell"] = ut_sell_s
-        ssl_hlv, _, _ = ssl_channel(df["high"], df["low"], df["close"])
-        df["ssl"] = ssl_hlv
-        bull_ob_s, bear_ob_s, _, _, _, _, struct_s = order_blocks(
-            df["high"], df["low"], df["close"], df["volume"]
-        )
-        df["bull_ob"] = bull_ob_s
-        df["bear_ob"] = bear_ob_s
-        df["struct"] = struct_s
-        fvg_bull_s, fvg_bear_s = fvg(df["high"], df["low"], df["close"])
-        df["fvg_bull"] = fvg_bull_s
-        df["fvg_bear"] = fvg_bear_s
-        sl_long_s, sl_short_s, _, _ = atr_rsi_sl(
-            df["open"], df["high"], df["low"], df["close"]
-        )
-        df["sl_long"] = sl_long_s
-        df["sl_short"] = sl_short_s
-
-        df = df.dropna(subset=["rsi", "ssl", "atr"])
-
-        for tp in tp_ratios:
-            for combo in combos:
-                signals = build_signals(df, combo)
-                stats = run_backtest(df, signals, tp_ratio=tp)
-                if stats and stats["trades"] >= 5:
-                    # Trades per day
-                    days = max((df.index[-1] - df.index[0]).days, 1)
-                    trades_per_day = stats["trades"] / days
-                    all_results.append({
-                        "timeframe": tf,
-                        "strategy": combo,
-                        "tp_ratio": tp,
-                        **stats,
-                        "trades_per_day": round(trades_per_day, 2),
-                    })
-
-    return pd.DataFrame(all_results)
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
-    results = investigate("ETH", timeframes=["1h", "4h"], tp_ratios=[1.5, 2.0, 2.5])
-
-    if results.empty:
-        print("No results.")
-    else:
-        results = results.sort_values("win_rate", ascending=False)
-
-        print("\n" + "="*75)
-        print("  STRATEGY INVESTIGATION RESULTS — ETH PERPS")
-        print("="*75)
-        print(f"  {'Strategy':<22} {'TF':<5} {'TP':<5} {'Trades':<8} {'TPD':<6} {'WR%':<8} {'PF':<7} {'Total R'}")
-        print("-"*75)
-
-        for _, row in results.head(20).iterrows():
-            print(f"  {row['strategy']:<22} {row['timeframe']:<5} {row['tp_ratio']:<5} "
-                  f"{row['trades']:<8} {row['trades_per_day']:<6} "
-                  f"{row['win_rate']:.1f}%{'':<3} {row['profit_factor']:.2f}{'':>4} {row['total_r']:.2f}R")
-
-        print("="*75)
-        print("\nTPD = trades per day | PF = profit factor | Total R = total risk units gained")
-
-        # Best overall
-        best = results.sort_values(["win_rate", "profit_factor"], ascending=False).iloc[0]
-        print(f"\n>>> BEST WIN RATE: {best['strategy']} on {best['timeframe']} "
-              f"| TP {best['tp_ratio']}x | WR {best['win_rate']:.1f}% | PF {best['profit_factor']:.2f}")
-
-        # Best profit factor
-        best_pf = results.sort_values("profit_factor", ascending=False).iloc[0]
-        print(f">>> BEST PROFIT FACTOR: {best_pf['strategy']} on {best_pf['timeframe']} "
-              f"| TP {best_pf['tp_ratio']}x | WR {best_pf['win_rate']:.1f}% | PF {best_pf['profit_factor']:.2f}")
-
-        # Best for daily trades target (1-3/day)
-        daily = results[(results["trades_per_day"] >= 0.5) & (results["trades_per_day"] <= 4)]
-        if not daily.empty:
-            best_daily = daily.sort_values(["win_rate", "profit_factor"], ascending=False).iloc[0]
-            print(f">>> BEST FOR 1-4 TRADES/DAY: {best_daily['strategy']} on {best_daily['timeframe']} "
-                  f"| TP {best_daily['tp_ratio']}x | WR {best_daily['win_rate']:.1f}% "
-                  f"| {best_daily['trades_per_day']} trades/day")
+    import sys
+    coins = sys.argv[1:] or WATCHLIST
+    print(f"Backtesting {coins} on 1h against the live trader.py strategy...")
+    trades = run_full_backtest(coins=coins, timeframes=("1h",))
+    print()
+    print(summarize(trades))

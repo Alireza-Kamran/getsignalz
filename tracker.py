@@ -16,6 +16,8 @@ def _px(x):
     return round(x, min(-d + 4, 4))
 
 from config import TELEGRAM_TOKEN as TOKEN, TELEGRAM_CHANNEL as CHANNEL, HYPERLIQUID_ACCOUNT as ACCOUNT
+from trader import WATCHLIST
+import analyze
 CHANNEL_USERNAME = CHANNEL.lstrip("@")
 BASE     = f"https://api.telegram.org/bot{TOKEN}"
 STATE_F  = "/root/trade/state.json"
@@ -58,6 +60,21 @@ def _send(text):
     }, timeout=10)
     d = r.json()
     return d["result"]["message_id"] if d.get("ok") else None
+
+
+def _send_photo(photo_bytes, caption=""):
+    try:
+        r = requests.post(f"{BASE}/sendPhoto",
+            data={"chat_id": CHANNEL, "caption": caption, "parse_mode": "HTML"},
+            files={"photo": ("result.png", photo_bytes, "image/png")},
+            timeout=15)
+        d = r.json()
+        if not d.get("ok"):
+            print(f"[tracker] sendPhoto failed: {d.get('description')}")
+        return d.get("result", {}).get("message_id") if d.get("ok") else None
+    except Exception as e:
+        print(f"[tracker] sendPhoto error: {e}")
+        return None
 
 
 def _edit(msg_id, text):
@@ -259,13 +276,20 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
             f"  Avg adverse: <b>{avg_dd:.1f}%</b>"
         )
 
+    try:
+        trust_score = analyze.health_score()["total"]
+        trust_section = f"🏆 <b>Trust Score:</b> {trust_score}/100\n\n"
+    except Exception:
+        trust_section = ""
+
     return (
         f"📌 <b>GETSIGNALZ AI — DASHBOARD</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{open_section}\n\n"
         f"{bal_section}\n\n"
         f"{stats_section}\n\n"
-        f"🔬 Testnet mode  ·  1h candles  ·  13 pairs\n"
+        f"{trust_section}"
+        f"🔬 Testnet mode  ·  1h candles  ·  {len(WATCHLIST)} pairs\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Updated {now}</i>"
     )
@@ -626,5 +650,24 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
         })
 
     save_state(state)
+
+    # Post a visual result card to the public channel. Best-effort only — never
+    # let a card-generation/send failure interfere with stats already saved above.
+    if t:
+        try:
+            import result_card
+            opened_at = datetime.fromisoformat(t["opened_at"])
+            closed_at = datetime.utcnow()
+            duration_h = (closed_at - opened_at).total_seconds() / 3600
+            card = result_card.generate(
+                coin=coin, direction=t["dir"], entry=t["entry"], exit_px=exit_price,
+                sl=t["sl"], tp=t["tp"], lev_pct=lev_pct, result=result,
+                sig_num=t.get("signal_num", 0), opened_at=opened_at, closed_at=closed_at,
+                duration_h=duration_h, max_adverse=max_adverse,
+                leverage=t.get("leverage", 10), size=t.get("size", 0),
+            )
+            _send_photo(card, caption=f"#Signal{t.get('signal_num', 0)}  {coin}")
+        except Exception as e:
+            print(f"[tracker] result card error: {e}")
     update_dashboard(state)
     return stats
