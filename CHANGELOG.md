@@ -13,6 +13,18 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.16.0 — 2026-07-23
+
+**Stats:** 68 trades · WR: 33% · P&L: +205.1%
+
+**Parameter changes (1):**
+- WATCHLIST: removed BNB (5T/0%WR/-10.3% avg — crossed the 5-trade removal bar tracked since 07-18, same evidence bar used to remove RUNE on 07-15)
+
+**Code improvements (1):**
+- self_improve.sh: the nightly 02:00 UTC self-learn session — the one that tracks and acts on watchlist removals like BNB above — had been silently failing for 3 consecutive nights (`claude: command not found` Jul 21/22 from a bare cron PATH, then `OAuth session expired` Jul 23), which is why BNB's removal went unactioned until caught manually tonight. Pinned an explicit PATH, resolved the claude binary via `command -v` with a hard failure message if still missing, and added a Telegram DM alert to the owner on any future failure (bad exit code or auth/PATH/session-limit error pattern in the output) so a multi-night silent gap can't happen again unnoticed.
+
+---
+
 ## v1.15.4 — 2026-07-22
 
 **Stats:** 68 trades · WR: 39% · P&L: +209.0%

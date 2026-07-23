@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-07-22",
+  "last_updated": "2026-07-23",
   "updated_by": "auto-nightly",
   "min_score": 7,
   "max_trades": 1,
@@ -21,7 +21,6 @@
     "AVAX",
     "ATOM",
     "OP",
-    "BNB",
     "APT",
     "DOGE"
   ],
@@ -36,6 +35,6 @@
     "cloud_wide": 1,
     "willr_exhausted": -99
   },
-  "notes": "2026-07-20 nightly (reviewing 07-19, prior memory session was 07-18 - 07-19 had no memory session, only the automated ai_brain/review.py pathway ran, v1.15.0/v1.15.1): Two new data points. (1) DOGE SHORT 07-17 21:03 UTC score=7/8 (ADX-bonus only, ADX 30.6, no cloud-width), 1h TF, conservative EMA-recross, 4H aligned: closed 07-18 09:27 UTC via trail-TP mechanism at +11.3 pct (clean execution, R:R 1:2.0 confirmed). (2) AAVE SHORT 07-19 12:03 UTC score=8/8 (BOTH bonuses: ADX 33.2 AND cloud-width 0.7 pct), 1h TF, conservative, 4H aligned: still OPEN as of 02:00 UTC report, max_adverse -11.6 pct (leveraged, approx -1.16 pct price at 10x), trail_stage=0 (not yet breakeven). Updated score>=7 conservative-only EV (RUNE excluded, per 07-15 removal): n=6 closed (AAVE +2.2, DOGE-07-08 +2.7, INJ +26.8, ARB +4.7, WLD +0.45, DOGE-07-17 +11.31) = 6/6 positive (100 pct), avg +8.03 pct/trade - strongest read yet on this band, up from n=5/+7.36 pct last session. Sub-bands still below n>=5 action threshold: both-bonus (score 8) n=2 (ARB+WLD) avg +2.57 pct, 2/2 positive - AAVE (open) will be the 3rd point. ADX-bonus-only (score 7, no cloud-width) n=4 (INJ+26.8, RUNE-8.0, RUNE-17.5, DOGE+11.31) = 2/4 positive avg +3.15 pct - improved from 1/3 avg +0.43 pct last session; both losses are legacy RUNE trades (RUNE removed from WATCHLIST 07-15) so this bucket will only draw from the 13 current coins going forward. Do not act on either sub-band split yet (n<5). Notable non-event: ETH LONG signal fired 07-19 21:00 UTC, score=7/8 (ADX 41, 4H aligned, conservative) - the FIRST-EVER conservative-entry signal on ETH - but was not taken because AAVE was already open and MAX_TRADES=1. This is the first concrete opportunity-cost evidence against MAX_TRADES=1, but n=1 missed signal, and max drawdown is already -82.8 pct (legacy pre-gate scar, unchanged this session) - not sufficient to justify raising concurrent-trade risk. Flagged, not acted on. Execution clean: v1.15.0 (07-18 23:xx UTC ai_brain/review.py pathway, not this memory session) preemptively fixed a real bug in executor.py update_sl() before it could bite - the except-block on query_order_by_oid failure used to swallow silently (falling through to cancel() and deleting the resting TP on trail update, the same failure class as multiple TP-deletion bugs fixed in June); changed to skip only the unidentified order, preserving TP. Verified intact in executor.py tonight. slippage_buf=0.003 (v1.12.0) also intact. trader.py verified intact: MIN_SCORE=7, has_conservative gate, MIN_ADX=30/25, 13-coin WATCHLIST (no RUNE) all survived the 07-19 automated pathway run untouched. No parameter changes made - n=6 on score>=7 band is a confirmation (100 pct WR, strongest read yet) not a contradiction; both sub-band splits remain below the n>=5 action threshold. BNB still 4T/0 pct WR/-11.6 pct avg blended, one trade short of removal bar, no new BNB signal this session. Did NOT call apply_config_to_trader with any changed value - no min_score/watchlist value changed, avoids a needless restart per repeated precedent (07-05/07-12/07-16/07-17/07-18). No .py file touched this session (the query_order_by_oid fix was already applied by the other pathway) so no systemctl restart needed.",
+  "notes": "2026-07-23 manual session (Kamran): BNB removed from WATCHLIST. Crossed the standing 5-trade/0%WR removal bar that has been tracked since 2026-07-18 (was 4T/0%WR/-11.6%avg, flagged one trade short). Fresh full_report() now shows BNB at 5T/0%WR/-10.3%avg -- five losses, zero wins, negative average. Same evidence bar used to remove RUNE on 2026-07-15 (14%WR/-9.15% total over 7 trades). Removal decision made in this session because the nightly 02:00 UTC self-learn session (which normally tracks and acts on this) had been silently failing for 3 nights (claude CLI PATH/auth issues, fixed same session) and missed it.",
   "suspended_coins": {}
 }

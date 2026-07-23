@@ -2,11 +2,28 @@
 # GetSignalz AI — nightly self-improvement session
 # Runs at 2:00 AM UTC daily via cron.
 
+# Cron uses a minimal default PATH that doesn't reliably include the claude
+# CLI's install location — pin the same PATH the other root cron jobs use.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 LOG="/root/trade/selflearn.log"
 echo "" >> "$LOG"
 echo "========================================" >> "$LOG"
 echo "SELF-LEARN: $(date -u '+%Y-%m-%d %H:%M UTC')" >> "$LOG"
 echo "========================================" >> "$LOG"
+
+cd /root/trade
+
+CLAUDE_BIN="$(command -v claude)"
+if [ -z "$CLAUDE_BIN" ]; then
+    echo "FATAL: claude CLI not found on PATH ($PATH)" >> "$LOG"
+    python3 -c "
+import sys; sys.path.insert(0, '/root/trade')
+import tg
+tg.dm_owner('⚠️ Nightly self-learn (02:00 UTC) FAILED: claude CLI not found on PATH. Cron job needs attention.')
+" >> "$LOG" 2>&1
+    exit 1
+fi
 
 PROMPT='You are the brain of GetSignalz AI — a self-improving crypto trading bot.
 
@@ -126,6 +143,19 @@ tg.dm_owner(report)
 You are a professional trader who happened to also be a software engineer. You think in expected value, not just win rate. You look for edge, not perfection. You know that 55% win rate with 2:1 RR is excellent. You know that 70% win rate with 0.5:1 RR is a losing system. Make decisions accordingly.
 '
 
-cd /root/trade
-claude -p "$PROMPT" >> "$LOG" 2>&1
-echo "Session ended: $(date -u '+%H:%M UTC')" >> "$LOG"
+OUT_TMP="$(mktemp)"
+"$CLAUDE_BIN" -p "$PROMPT" > "$OUT_TMP" 2>&1
+RC=$?
+cat "$OUT_TMP" >> "$LOG"
+echo "Session ended: $(date -u '+%H:%M UTC') (exit $RC)" >> "$LOG"
+
+if [ $RC -ne 0 ] || grep -qiE "command not found|oauth session expired|session limit|failed to authenticate" "$OUT_TMP"; then
+    SNIPPET="$(tail -c 500 "$OUT_TMP")"
+    python3 - "$SNIPPET" <<'PYEOF' >> "$LOG" 2>&1
+import sys
+sys.path.insert(0, "/root/trade")
+import tg
+tg.dm_owner("⚠️ Nightly self-learn (02:00 UTC) likely failed:\n\n" + sys.argv[1])
+PYEOF
+fi
+rm -f "$OUT_TMP"

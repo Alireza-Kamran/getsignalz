@@ -10,19 +10,7 @@ from indicators import (fetch_candles, rsi, atr, adx, ssl_channel,
 
 # ── Coins to monitor ──────────────────────────────────────────────────────────
 WATCHLIST = [
-    "ETH",
-    "WLD",
-    "ARB",
-    "SUI",
-    "SOL",
-    "INJ",
-    "AAVE",
-    "AVAX",
-    "ATOM",
-    "OP",
-    "BNB",
-    "APT",
-    "DOGE"
+    "ETH", "WLD", "ARB", "SUI", "SOL", "INJ", "AAVE", "AVAX", "ATOM", "OP", "APT", "DOGE"
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
