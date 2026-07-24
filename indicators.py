@@ -199,3 +199,161 @@ def williams_r(high, low, close, length=21, ema_len=13):
 def ema_line(close, length=200):
     """Simple EMA. Used as the EMA 200 trend filter."""
     return close.ewm(span=length, adjust=False).mean()
+
+
+def liquidity_pools(open_, high, low, close, volume, contact_min=2, gap_bars=5, wait_bars=10):
+    """
+    Liquidity Pool zones — bar-by-bar port of the "Liquidity Pools" block in
+    ind.txt (Kamran's own Pine Script indicator). A zone is a price level
+    that has been repeatedly wicked into and rejected from (without closing
+    through) — validated by requiring `contact_min` separate contacts,
+    spaced at least `gap_bars` apart, before it confirms `wait_bars` after
+    the last contact. This is the user's actual manual target-selection
+    method: these zones are the "liquidity pools" he waits for price to
+    reach.
+
+    Runs on whatever OHLC series is passed in (this project already applies
+    Heikin Ashi upstream via fetch_candles(), same as order_blocks()/
+    atr_rsi_sl() — kept consistent with that established convention rather
+    than special-casing raw price just for this indicator).
+
+    Returns (bear_zones, bull_zones) — each a list of zone dicts:
+      {"left": int, "right": int, "top": float, "bottom": float,
+       "vol": float, "mitigated_bar": int or None}
+    "left"/"right"/"mitigated_bar" are POSITIONAL bar indices into the input
+    series (0..len-1) — map to real time via series.index[pos]. A zone with
+    mitigated_bar=None is still active as of the last bar. bear_zones sit
+    above price (resistance, formed from rejected highs); bull_zones sit
+    below (support, formed from rejected lows).
+
+    Note: Pine's box-merge logic pushes overlapping zones as duplicate array
+    entries referencing the same mutable box (an artifact of how it's
+    written, not a deliberate design choice) — this port merges overlapping
+    zones into a single widened entry instead, which is behaviorally
+    equivalent for "what zones are active / how strong are they" but avoids
+    carrying that duplication forward.
+    """
+    n = len(close)
+    if n < 3:
+        return [], []
+
+    o_a  = open_.values
+    c_a  = close.values
+    h_a  = high.values
+    l_a  = low.values
+    v_a  = volume.values
+    c_top_a = np.maximum(o_a, c_a)
+    c_bot_a = np.minimum(o_a, c_a)
+
+    # Running structures: [h, t, b, l, bi] (highest-high / lowest-low anchors)
+    hst = [h_a[0], c_top_a[0], c_bot_a[0], l_a[0], 0]
+    lst = [h_a[0], c_top_a[0], c_bot_a[0], l_a[0], 0]
+    h_count = l_count = 0
+    last_h_wick = last_l_wick = 0
+    hi_vol = lo_vol = 0.0
+
+    # Per-bar history for Pine's [1]/[2]-offset comparisons
+    hst_t_hist  = [hst[1]]
+    lst_b_hist  = [lst[2]]
+    h_wick_hist = [False]
+    l_wick_hist = [False]
+    bs_hw_hist  = [0]
+    bs_lw_hist  = [0]
+
+    h_zn = None   # in-progress running zone (dict) — mirrors Pine's h_zn/l_zn
+    l_zn = None
+    bear_zones, bull_zones = [], []
+
+    for i in range(1, n):
+        cur = (h_a[i], c_top_a[i], c_bot_a[i], l_a[i], i)
+
+        # ── Adjusting High/Low check boundaries ──
+        if (h_a[i] > hst[0]) and (c_top_a[i] > hst[0] or c_top_a[i] < hst[1]):
+            if h_count > 1:
+                lst = list(cur); lo_vol = 0.0; l_count = 0
+            hst = list(cur); hi_vol = 0.0; h_count = 1; last_h_wick = i
+
+        if (l_a[i] < lst[3]) and (c_bot_a[i] < lst[3] or c_bot_a[i] > lst[2]):
+            if l_count > 1:
+                hst = list(cur); hi_vol = 0.0; h_count = 0
+            lst = list(cur); lo_vol = 0.0; l_count = 1; last_l_wick = i
+
+        # ── Contact counting: previous bar's wick flag + stable structure + gap spacing ──
+        if h_wick_hist[i - 1] and (hst_t_hist[i - 1] == hst_t_hist[i - 2]) and (bs_hw_hist[i - 1] > gap_bars):
+            h_count += 1
+            last_h_wick = i - 1
+        if l_wick_hist[i - 1] and (lst_b_hist[i - 1] == lst_b_hist[i - 2]) and (bs_lw_hist[i - 1] > gap_bars):
+            l_count += 1
+            last_l_wick = i - 1
+
+        bs_hw = abs(last_h_wick - i)
+        bs_lw = abs(last_l_wick - i)
+        prev_bs_hw, prev_bs_lw = bs_hw_hist[i - 1], bs_lw_hist[i - 1]
+
+        # ── Extend structure extremes ──
+        if h_a[i] > hst[0]: hst[0] = h_a[i]
+        if l_a[i] < lst[3]: lst[3] = l_a[i]
+
+        # ── Volume tracking ──
+        rng = h_a[i] - l_a[i]
+        if rng > 0:
+            hi_vol += max(h_a[i] - hst[1], 0) / rng * v_a[i]
+            lo_vol += max(lst[2] - l_a[i], 0) / rng * v_a[i]
+
+        # ── Current-bar wick flags (read next iteration for contact counting) ──
+        h_wick = (h_a[i] > hst[1]) and (c_top_a[i] <= hst[1])
+        l_wick = (l_a[i] < lst[2]) and (c_bot_a[i] >= lst[2])
+
+        # ── Zone creation/merging ──
+        crossover_hw = (prev_bs_hw <= wait_bars) and (bs_hw > wait_bars)
+        crossover_lw = (prev_bs_lw <= wait_bars) and (bs_lw > wait_bars)
+
+        if h_count >= contact_min and crossover_hw and c_a[i] < hst[1]:
+            new_top, new_bot = hst[0], hst[1]
+            if h_zn is not None and (hst[4] == h_zn["left"] or (new_top >= h_zn["bottom"] and new_bot <= h_zn["top"])):
+                h_zn["top"]    = max(new_top, h_zn["top"])
+                h_zn["bottom"] = min(new_bot, h_zn["bottom"])
+                h_zn["vol"]   += hi_vol
+                h_zn["right"]  = i
+            else:
+                h_zn = {"left": hst[4], "right": i, "top": new_top, "bottom": new_bot,
+                        "vol": hi_vol, "state": 0, "mitigated_bar": None}
+                bear_zones.append(h_zn)
+
+        if l_count >= contact_min and crossover_lw and c_a[i] > lst[2]:
+            new_top, new_bot = lst[2], lst[3]
+            if l_zn is not None and (lst[4] == l_zn["left"] or (new_top >= l_zn["bottom"] and new_bot <= l_zn["top"])):
+                l_zn["top"]    = max(new_top, l_zn["top"])
+                l_zn["bottom"] = min(new_bot, l_zn["bottom"])
+                l_zn["vol"]   += lo_vol
+                l_zn["right"]  = i
+            else:
+                l_zn = {"left": lst[4], "right": i, "top": new_top, "bottom": new_bot,
+                        "vol": lo_vol, "state": 0, "mitigated_bar": None}
+                bull_zones.append(l_zn)
+
+        # ── Mitigation: 2 consecutive closes through the zone removes it ──
+        for z in bull_zones:
+            if z["mitigated_bar"] is not None:
+                continue
+            if c_a[i] < z["bottom"]:
+                if z["state"] < 0:
+                    z["mitigated_bar"] = i
+                z["state"] -= 1
+            else:
+                z["state"] = 0
+        for z in bear_zones:
+            if z["mitigated_bar"] is not None:
+                continue
+            if c_a[i] > z["top"]:
+                if z["state"] < 0:
+                    z["mitigated_bar"] = i
+                z["state"] -= 1
+            else:
+                z["state"] = 0
+
+        hst_t_hist.append(hst[1]); lst_b_hist.append(lst[2])
+        h_wick_hist.append(h_wick); l_wick_hist.append(l_wick)
+        bs_hw_hist.append(bs_hw); bs_lw_hist.append(bs_lw)
+
+    return bear_zones, bull_zones

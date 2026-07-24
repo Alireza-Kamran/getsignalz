@@ -13,6 +13,28 @@ All nightly improvements are logged here automatically.
 
 ---
 
+## v1.18.0 — 2026-07-24 — STRATEGY REBUILD
+
+**Stats:** 0 trades (fresh regime, reset 2026-07-23) · previous regime: 68 trades, WR 33%, +205.1%
+
+**Full core strategy replacement.** Kamran described his actual manual trading process in detail — wait for a liquidity pool (LP) with high probability of being reached, confirm the path to it is clean of obstacles that could react first and stop-hunt, enter precisely off a nearby order block or FVG, size risk for a ~20% max stop, minimum 1:2 R:R, trail through progressive targets toward the far edge of an FVG as the final target. This did not match the live CM Sling Shot (EMA cloud) system at all — that system was built 2026-06-25 from a shorter, less accurate description.
+
+**Code changes:**
+- `indicators.py`: new `liquidity_pools()` — a bar-by-bar port of the Liquidity Pools zone-tracking logic in `ind.txt` (Kamran's own Pine Script), never previously ported. Wick-rejection contact counting, zone confirmation, 2-consecutive-close mitigation.
+- `trader.py`: full internal rewrite (same public interface — `find_best_setup`, `score_setup`, `build_df`, `WATCHLIST`, etc. all unchanged, so `live.py`/`tracker.py`/`ai_brain.py` needed zero changes). Entry = confirmed rejection off a nearby order block/LP zone (price wicked in, closed back out — not bare proximity, see bug note below). Target = an opposite-type liquidity pool farther out, with a path-clean check against other unmitigated OB/FVG zones in between. Trend filter switched from EMA-cloud direction to market-structure direction (`order_blocks()`'s `struct`). `MAX_LEV_LOSS` tightened 25%→20% (Kamran's stated number; `executor.py`'s independent 25% safety clamp is untouched, unrelated defense-in-depth).
+- `backtest.py`: updated to match (macro-trend calc switched from EMA-cloud to structure-based, matching `trader.py`'s new `get_macro_trend()`).
+
+**Bugs found and fixed during backtesting (before going live):**
+- Entries were firing on bare proximity to a zone with no confirmation it was actually holding — the exact "aggressive entry" failure mode already proven to lose ~-10.4%/trade in the old system. Fixed to require a rejection candle (wicked into the zone, closed back out) before entering.
+- `order_blocks()` only flags the bar an OB formed on with no mitigation tracking — order blocks from months ago that price had long since closed through were still being treated as live entry triggers. Added mitigation filtering.
+- FVG target-extension had the direction backwards (was targeting a same-type gap instead of the opposing-type "unfinished business" gap Kamran described) and had the same missing-mitigation-check bug as the order blocks. Fixed both.
+- The path-clean/confluence check was only looking at other liquidity pool zones, not order blocks or FVGs — despite Kamran explicitly describing OB/FVG confluence as part of what raises a target's credibility. Fixed to include both.
+- `backtest.py`'s trade-qualification check compared the raw `score_setup()` output against `MIN_SCORE`, but the live path adds a timeframe-strength bonus before that comparison — the two were silently using different bars. Promoted the bonus table to a shared `trader.TF_BONUS` constant both paths import, so it can't drift again.
+
+**Verification:** backtest across the full watchlist after fixes: 15 simulated trades, blended positive EV (concentrated in 2 coins, thin sample — not proof of an edge, but not broken either). Live watchlist scan completed cleanly with no qualifying setup at deploy time (expected — not every scan should fire). Book was flat at restart.
+
+---
+
 ## v1.17.0 — 2026-07-23
 
 **Stats:** 68 trades · WR: 33% · P&L: +205.1%

@@ -28,25 +28,26 @@ Known simplifications (documented, not hidden):
   for hypothesis-testing, not a multi-year statistical guarantee.
 """
 import pandas as pd
-from trader import build_df, score_setup, WATCHLIST, MIN_SCORE, TP_RATIO
-from indicators import sling_shot, fetch_candles
+from trader import build_df, score_setup, WATCHLIST, MIN_SCORE, TP_RATIO, TF_BONUS
+from indicators import order_blocks, fetch_candles
 
 
 def _macro_series(coin, base_tf, base_index):
-    """Higher-TF (4h/1d) Sling Shot cloud direction, as-of each base-tf timestamp.
+    """Higher-TF (4h/1d) market structure direction, as-of each base-tf timestamp.
 
-    Mirrors trader.get_macro_trend() but vectorized across the whole backtest
-    window instead of one live API call — same source data, no lookahead
-    (each base-tf bar only ever sees higher-TF bars already closed by then).
+    Mirrors trader.get_macro_trend() (order_blocks' struct: 1=bullish,
+    0=bearish) but vectorized across the whole backtest window instead of
+    one live API call per bar — same source data, no lookahead (each
+    base-tf bar only ever sees higher-TF bars already closed by then).
     """
     macro_tf = "4h" if base_tf in ("1h", "15m") else "1d"
     df4 = fetch_candles(coin, macro_tf, lookback_bars=1500)
     if df4 is None or len(df4) < 100:
         return pd.Series(0, index=base_index)
-    ss_fast, ss_slow, *_ = sling_shot(df4["close"])
+    _, _, _, _, _, _, struct = order_blocks(df4["high"], df4["low"], df4["close"], df4["volume"])
     macro = pd.Series(0, index=df4.index)
-    macro[ss_fast > ss_slow] = 1
-    macro[ss_fast < ss_slow] = -1
+    macro[struct == 1] = 1
+    macro[struct == 0] = -1
     return macro.reindex(base_index, method="ffill").fillna(0).astype(int)
 
 
@@ -82,6 +83,9 @@ def backtest_coin(coin, tf="1h", bars=1500):
 
         for direction in (1, -1):
             score, reasons, sl, tp, leverage, sl_pct, tp_pct = score_setup(sub, direction, macro_dir)
+            if score == 0:
+                continue
+            score = min(score + TF_BONUS.get(tf, 0), 8)
             if score >= MIN_SCORE:
                 in_trade = {
                     "coin": coin, "tf": tf, "direction": direction, "score": score,

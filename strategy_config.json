@@ -2,7 +2,7 @@
   "version": 1,
   "last_updated": "2026-07-23",
   "updated_by": "auto-nightly",
-  "min_score": 7,
+  "min_score": 6,
   "max_trades": 1,
   "risk_pct": 0.01,
   "trail_pct": 0.08,
@@ -25,16 +25,15 @@
     "DOGE"
   ],
   "signal_weights": {
-    "ema_cloud": 2,
-    "entry_conservative": 2,
-    "entry_aggressive": -99,
-    "macro_4h_aligned": 2,
-    "macro_4h_neutral": 1,
-    "macro_4h_against": -1,
-    "adx_strong": 1,
-    "cloud_wide": 1,
-    "willr_exhausted": -99
+    "base_zone_target": 2,
+    "zone_reliability_good": 2,
+    "zone_reliability_neutral": 1,
+    "zone_reliability_poor": 0,
+    "ob_fvg_confluence": 2,
+    "timeframe_4h_or_1d": 2,
+    "timeframe_1h": 1,
+    "timeframe_15m": 0
   },
-  "notes": "2026-07-23 manual session (Kamran): BNB removed from WATCHLIST. Crossed the standing 5-trade/0%WR removal bar that has been tracked since 2026-07-18 (was 4T/0%WR/-11.6%avg, flagged one trade short). Fresh full_report() now shows BNB at 5T/0%WR/-10.3%avg -- five losses, zero wins, negative average. Same evidence bar used to remove RUNE on 2026-07-15 (14%WR/-9.15% total over 7 trades). Removal decision made in this session because the nightly 02:00 UTC self-learn session (which normally tracks and acts on this) had been silently failing for 3 nights (claude CLI PATH/auth issues, fixed same session) and missed it.",
+  "notes": "2026-07-24 STRATEGY-GENERATION BOUNDARY: full rebuild of the core strategy. Kamran described his actual manual trading process in detail (liquidity pool target-seeking, path-clean confirmation, order block/FVG entry, ~20% max stop, min 1:2 R:R, FVG-gap-fill final target) and it did not match the live CM Sling Shot (EMA cloud) system at all -- that system was built 2026-06-25 from a shorter, less accurate description. Liquidity Pool zone detection (from ind.txt, never previously ported) is now live in indicators.py. FVG (existed but was never called by trader.py) is now used for target extension. Order blocks (previously only used for SL fallback) now drive entry-zone detection. MAX_LEV_LOSS tightened 25%->20% in trader.py to match Kamran's stated risk tolerance (executor.py's independent 25% safety clamp is untouched, unrelated defense-in-depth). MIN_SCORE reset to 6 (new scoring scale, unrelated to the old system's MIN_SCORE=7 -- do not compare against old-regime EV data). Per Kamran: no shadow-mode gate needed, demo balance is fake/for-testing, went live once code was verified sound (backtest sanity pass + compile checks + spot-checked individual signals). ALL EV DATA COLLECTED BEFORE THIS DATE IS FROM A DIFFERENT, UNRELATED STRATEGY -- do not blend pre/post-rebuild trade data in any analysis, exactly as the 06-25 rebuild boundary was already handled.",
   "suspended_coins": {}
 }
