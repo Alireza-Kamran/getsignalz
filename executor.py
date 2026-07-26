@@ -168,6 +168,7 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
     # Recalculate SL/TP from actual fill price — price may have moved since signal
     MAX_LEV_LOSS = 0.25   # max 25% leveraged loss at SL regardless of trade leverage
     max_sl_pct   = MAX_LEV_LOSS / leverage   # e.g. 1.25% for 20x, 2.5% for 10x
+    original_tp_price = tp_price
     risk_dist = abs(entry_price - sl_price)
     if direction == 1 and sl_price >= entry_price:
         sl_price = entry_price * (1 - max_sl_pct)
@@ -181,7 +182,8 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
         risk_dist = max_risk
         sl_price = entry_price + risk_dist if direction == -1 else entry_price - risk_dist
         logger.info(f"SL clamped to {max_sl_pct*100:.2f}% from fill ({leverage}x → max {MAX_LEV_LOSS*100:.0f}% risk): ${sl_price:.5f}")
-    tp_price = entry_price + direction * risk_dist * tp_ratio
+    min_tp = entry_price + direction * risk_dist * tp_ratio
+    tp_price = max(original_tp_price, min_tp) if direction == 1 else min(original_tp_price, min_tp)
     logger.info(f"Adjusted SL=${sl_price:.5f} TP=${tp_price:.5f} (R:R 1:{tp_ratio})")
 
     # Place SL order

@@ -16,7 +16,8 @@ def _px(x):
     return round(x, min(-d + 4, 4))
 
 from config import TELEGRAM_TOKEN as TOKEN, TELEGRAM_CHANNEL as CHANNEL, HYPERLIQUID_ACCOUNT as ACCOUNT
-from trader import WATCHLIST
+from trader import WATCHLIST, TRAIL_R_STEP
+import strategy2
 import analyze
 CHANNEL_USERNAME = CHANNEL.lstrip("@")
 BASE     = f"https://api.telegram.org/bot{TOKEN}"
@@ -126,6 +127,8 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
     """
     coin      = t["coin"]
     direction = t["dir"]
+    strat     = t.get("strategy", "S1")
+    strat_tag = "Mean-Reversion" if strat == "S2" else "Liquidity-Pool"
     entry     = hl_entry if hl_entry is not None else t["entry"]
     sl        = _px(t["sl"])
     tp        = _px(t["tp"])
@@ -133,6 +136,8 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
     sig_num   = t["signal_num"]
     opened_at = datetime.fromisoformat(t["opened_at"])
     max_adv   = t.get("max_adverse_pct", 0.0)
+    max_dd    = t.get("max_drawdown_pct", 0.0)
+    peak_roe  = t.get("peak_roe_pct", 0.0)
 
     side      = "LONG 🟢" if direction == 1 else "SHORT 🔴"
     now       = datetime.now(timezone.utc)
@@ -148,16 +153,19 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
         raw_move = (current_price - entry) / entry * 100
         lev_pnl  = raw_move * leverage * direction
 
-    # Static SL/TP risk-reward % (what happens if each is hit — fixed, based on entry)
-    sl_lev_pct  = abs(sl - entry) / entry * 100 * leverage   # max loss if SL hits
-    tp_lev_pct  = abs(tp - entry) / entry * 100 * leverage   # max gain if TP hits
+    # Signed, not absolute: once the ratchet has moved a stop past entry the
+    # stop represents LOCKED PROFIT, and rendering it as a loss (which the old
+    # abs() did) tells the reader the exact opposite of the truth.
+    sl_lev_pct  = (sl - entry) / entry * 100 * leverage * direction
+    tp_lev_pct  = (tp - entry) / entry * 100 * leverage * direction
     # Dynamic distance for the color indicator only
     dist_to_sl  = abs(current_price - sl) / entry * 100 * leverage
 
     pnl_emoji = "💹" if lev_pnl >= 0 else "💀"
     bar_n     = min(int(abs(lev_pnl) / 3), 10)
     bar       = "█" * bar_n + "░" * (10 - bar_n)
-    sl_status = "🟢" if dist_to_sl > 15 else "🟡" if dist_to_sl > 7 else "🔴"
+    sl_locked = sl_lev_pct > 0          # stop sits in profit — trade cannot lose
+    sl_status = "🔒" if sl_locked else ("🟢" if dist_to_sl > 15 else "🟡" if dist_to_sl > 7 else "🔴")
     tp_close  = " 🎯" if abs(current_price - tp) / entry * 100 * leverage < 5 else ""
     if hl_pnl_usd is not None:
         sign = "+" if hl_pnl_usd >= 0 else "-"
@@ -180,32 +188,45 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
         # Dollar PnL from the position itself (entry→exit)
         raw_dollar = (current_price - entry) * direction * abs(t.get("size", 0))
         dollar_s   = f"  ({'+' if raw_dollar >= 0 else '-'}${abs(raw_dollar):.2f})"
-        adv_line   = f"\n📉 Max adverse: <b>{max_adv:.1f}%</b>" if max_adv < 0 else ""
+        dd_bits = []
+        if max_adv < 0:
+            dd_bits.append(f"📉 Max drawdown: <b>{max_adv:.1f}%</b>")
+        if peak_roe > 0:
+            dd_bits.append(f"📈 Peak: <b>+{peak_roe:.1f}%</b>")
+        adv_line = ("\n" + "   ·   ".join(dd_bits)) if dd_bits else ""
         return (
             f"<b>{coin} {side}  #Signal{sig_num}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📍 <b>{status_line}</b>\n"
+            f"📍 <b>{status_line}</b>  ·  <i>{strat_tag}</i>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"Entry <code>${entry:.5g}</code> → Exit <code>${current_price:.5g}</code>\n"
             f"Duration: {dur_str}\n\n"
             f"{pnl_emoji} <b>{pct_s}</b>{dollar_s}{adv_line}"
         )
 
-    adv_line    = f"\n📉 Max adverse: <b>{max_adv:.1f}%</b>" if max_adv < 0 else ""
+    live_bits = []
+    if peak_roe > 0:
+        live_bits.append(f"📈 Peak <b>+{peak_roe:.1f}%</b>")
+    if max_adv < 0:
+        live_bits.append(f"📉 Max DD <b>{max_adv:.1f}%</b>")
+    adv_line = ("\n" + "  ·  ".join(live_bits)) if live_bits else ""
     activity    = t.get("activity", [])
     act_lines   = "\n".join(f"  · {a}" for a in activity[-4:])
     act_section = f"\n━━━━━━━━━━━━━━━━━━━━━━━\n📋 <b>Activity:</b>\n{act_lines}" if act_lines else ""
     return (
         f"<b>{coin} {side}  #Signal{sig_num}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📍 <b>📡 IN POSITION</b>\n"
+        f"📍 <b>📡 IN POSITION</b>  ·  <i>{strat_tag}</i>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Entry  <code>${entry:.5g}</code>  ·  {leverage}x\n"
         f"Now    <code>${current_price:.5g}</code>  ({dur_str})\n\n"
         f"{pnl_emoji} <b>{'+' if lev_pnl>=0 else ''}{lev_pnl:.1f}%</b>{pnl_usd_s}  "
         f"<code>[{bar}]</code>\n\n"
-        f"{sl_status} SL <code>${sl:.5g}</code>  <b>-{sl_lev_pct:.1f}%</b>\n"
-        f"🎯 TP <code>${tp:.5g}</code>  <b>+{tp_lev_pct:.1f}%</b>{tp_close}{adv_line}"
+        f"{sl_status} SL <code>${sl:.5g}</code>  "
+        f"<b>{'+' if sl_lev_pct >= 0 else ''}{sl_lev_pct:.1f}%</b>"
+        f"{'  <i>locked in</i>' if sl_locked else ''}\n"
+        f"🎯 TP <code>${tp:.5g}</code>  "
+        f"<b>{'+' if tp_lev_pct >= 0 else ''}{tp_lev_pct:.1f}%</b>{tp_close}{adv_line}"
         f"{act_section}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Updates every 60s</i>"
@@ -236,9 +257,12 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
             msg_id    = t.get("msg_id")
             link      = f'<a href="{_msg_link(msg_id)}">→ Live</a>' if msg_id else ""
             pnl_s     = f"+{lev_pnl:.1f}%" if lev_pnl >= 0 else f"{lev_pnl:.1f}%"
+            tag = "MR" if t.get("strategy") == "S2" else "LP"
+            lock = t.get("locked_r")
+            lock_s = f"  🔒+{lock:g}R" if lock else ""
             pos_lines.append(
-                f"  {'🟢' if direction==1 else '🔴'} <b>{coin}</b> {side}  "
-                f"{pnl_s}  {link}"
+                f"  {'🟢' if direction==1 else '🔴'} <b>{coin}</b> {side} "
+                f"<i>{tag}</i>  {pnl_s}{lock_s}  {link}"
             )
         open_section = "📂 <b>OPEN POSITIONS</b>\n" + "\n".join(pos_lines)
     else:
@@ -246,8 +270,9 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
 
     # Avg adverse from closed trades
     closed = state.get("closed_trades", [])
-    adverse_vals = [t.get("max_adverse_pct", 0) for t in closed if t.get("max_adverse_pct", 0) < 0]
-    avg_dd = round(sum(adverse_vals) / len(adverse_vals), 1) if adverse_vals else 0.0
+    dd_vals = [t.get("max_adverse_pct", 0) for t in closed if t.get("max_adverse_pct", 0) < 0]
+    avg_dd = round(sum(dd_vals) / len(dd_vals), 1) if dd_vals else 0.0
+    worst_dd = round(min(dd_vals), 1) if dd_vals else 0.0
 
     # Balance section
     start_bal = stats.get("start_balance", 999.0)
@@ -262,18 +287,84 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
     else:
         bal_section = f"💰 Start balance: <code>${start_bal:,.2f}</code>"
 
+    # Per-strategy split. Two engines now share the account, and a blended
+    # win rate would hide which one is actually producing the record -- the
+    # exact mistake that repeatedly corrupted the nightly tuner (see review.py).
+    def _strat_line(tag, label):
+        rows = [c for c in closed if c.get("strategy", "S1") == tag]
+        if not rows:
+            return f"  {label}  ·  — no closed trades yet —"
+        w = sum(1 for c in rows if (c.get("lev_pct") or 0) > 0)
+        l = sum(1 for c in rows if (c.get("lev_pct") or 0) < 0)
+        tot = sum(c.get("lev_pct") or 0 for c in rows)
+        usd = sum(c.get("pnl_usd") or 0 for c in rows)
+        rr_rows = [c.get("rr") for c in rows if c.get("rr") is not None]
+        rr_avg = sum(rr_rows) / len(rr_rows) if rr_rows else 0.0
+        decided = w + l
+        wrx = (w / decided * 100) if decided else 0
+        return (f"  {label}  ·  {len(rows)} trades\n"
+                f"    {w}W/{l}L  ·  WR <b>{wrx:.0f}%</b>  ·  "
+                f"avg <b>{rr_avg:+.2f}R</b>  ·  "
+                f"<b>{'+' if tot >= 0 else ''}{tot:.1f}%</b> "
+                f"({'+' if usd >= 0 else '-'}${abs(usd):,.2f})")
+
     if total > 0:
-        pct_s = f"+{total_pct:.1f}%" if total_pct >= 0 else f"{total_pct:.1f}%"
+        # Everything a stranger needs to judge the strategy, in one block:
+        # sample size, hit rate, what the average trade actually returns, how
+        # deep it goes underwater, and over what period. Both percentage bases
+        # are shown because they answer different questions and get conflated --
+        # the leveraged figure is what a signal reports, the unleveraged one is
+        # the raw price move, and both describe the same dollars.
+        lev_tot = sum(c.get("lev_pct") or 0 for c in closed)
+        raw_tot = sum(c.get("raw_pct") or 0 for c in closed)
+        usd_tot = sum(c.get("pnl_usd") or 0 for c in closed)
+        rrs     = [c.get("rr") for c in closed if c.get("rr") is not None]
+        avg_rr  = sum(rrs) / len(rrs) if rrs else 0.0
+        wins_l  = [c.get("lev_pct") or 0 for c in closed if (c.get("lev_pct") or 0) > 0]
+        loss_l  = [c.get("lev_pct") or 0 for c in closed if (c.get("lev_pct") or 0) < 0]
+        avg_w   = sum(wins_l) / len(wins_l) if wins_l else 0.0
+        avg_l   = sum(loss_l) / len(loss_l) if loss_l else 0.0
+        # Profit factor: gross winnings per unit of gross losses. >1 is an edge.
+        pf      = (sum(wins_l) / abs(sum(loss_l))) if loss_l and sum(loss_l) else 0.0
+        durs    = [c.get("duration_h") for c in closed if c.get("duration_h")]
+        avg_dur = sum(durs) / len(durs) if durs else 0.0
+
+        dates = sorted(c.get("opened_at", "") for c in closed if c.get("opened_at"))
+        span_s = ""
+        if len(dates) >= 2:
+            try:
+                d0 = datetime.fromisoformat(str(dates[0])[:19])
+                d1 = datetime.fromisoformat(str(dates[-1])[:19])
+                days = max((d1 - d0).days, 1)
+                span_s = f"  ·  {days}d  ·  {len(closed) / days * 30:.1f}/mo"
+            except Exception:
+                pass
+
+        def _money(v):
+            return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
+
         stats_section = (
-            f"📊 <b>TRACK RECORD</b>\n"
-            f"  {wins}W / {losses}L  ·  WR: <b>{wr:.0f}%</b>  ·  Total: <b>{pct_s}</b>\n"
-            f"  Avg adverse: <b>{avg_dd:.1f}%</b>"
+            f"📊 <b>PERFORMANCE</b>  <i>({len(closed)} closed{span_s})</i>\n"
+            f"  🎯 Win rate: <b>{wr:.1f}%</b>   ({wins}W / {losses}L)\n"
+            f"  ⚖️ Avg R:R: <b>{avg_rr:+.2f}R</b>   ·   Profit factor: <b>{pf:.2f}</b>\n"
+            f"\n"
+            f"  <b>With leverage:</b>  {'+' if lev_tot >= 0 else ''}{lev_tot:.1f}%  "
+            f"({_money(usd_tot)})\n"
+            f"  <b>No leverage:</b>    {'+' if raw_tot >= 0 else ''}{raw_tot:.2f}%  "
+            f"({_money(usd_tot)})\n"
+            f"\n"
+            f"  📈 Avg win: <b>+{avg_w:.1f}%</b>   ·   📉 Avg loss: <b>{avg_l:.1f}%</b>\n"
+            f"  🩸 Avg drawdown: <b>{avg_dd:.1f}%</b>   ·   Worst: <b>{worst_dd:.1f}%</b>\n"
+            f"  ⏱ Avg hold: <b>{avg_dur:.1f}h</b>\n"
+            f"\n🧠 <b>BY STRATEGY</b>\n"
+            f"{_strat_line('S1', 'Liquidity-Pool')}\n"
+            f"{_strat_line('S2', 'Mean-Reversion')}"
         )
     else:
         stats_section = (
             f"📊 <b>TRACK RECORD</b>\n"
             f"  {state.get('signal_count',1)-1} signals fired — building record\n"
-            f"  Avg adverse: <b>{avg_dd:.1f}%</b>"
+            f"  Avg drawdown: <b>{avg_dd:.1f}%</b>"
         )
 
     try:
@@ -289,7 +380,8 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
         f"{bal_section}\n\n"
         f"{stats_section}\n\n"
         f"{trust_section}"
-        f"🔬 Testnet mode  ·  1h candles  ·  {len(WATCHLIST)} pairs\n"
+        f"🔬 Testnet  ·  {strategy2.TF} candles  ·  "
+        f"{len(strategy2.WATCHLIST)} pairs  ·  Mean-Reversion\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>Updated {now}</i>"
     )
@@ -507,10 +599,25 @@ def _loop():
                     leverage  = t["leverage"]
                     roe_pct   = (price - entry) / entry * 100 * leverage * direction
 
-                if roe_pct < t.get("max_adverse_pct", 0.0):
+                # "Max drawdown" here is Kamran's definition: the deepest the
+                # trade ever went into the red, measured from entry. Peak ROE is
+                # tracked alongside it purely as extra colour on how far a
+                # winner ran before the ratchet closed it.
+                peak = max(t.get("peak_roe_pct", 0.0), roe_pct)
+                dd   = peak - roe_pct
+                if (peak > t.get("peak_roe_pct", 0.0)
+                        or dd > t.get("max_drawdown_pct", 0.0)
+                        or roe_pct < t.get("max_adverse_pct", 0.0)):
                     state2 = load_state()
                     if coin in state2["tracked"]:
-                        state2["tracked"][coin]["max_adverse_pct"] = round(roe_pct, 2)
+                        tr = state2["tracked"][coin]
+                        tr["peak_roe_pct"] = round(peak, 2)
+                        tr["max_drawdown_pct"] = round(
+                            max(dd, tr.get("max_drawdown_pct", 0.0)), 2)
+                        # Kept alongside: still the right measure of how close a
+                        # trade came to its stop before working out.
+                        tr["max_adverse_pct"] = round(
+                            min(roe_pct, tr.get("max_adverse_pct", 0.0)), 2)
                         save_state(state2)
 
                 # Edit live message with HL-accurate data
@@ -565,7 +672,7 @@ def _append_activity(coin, msg):
 
 
 def register_position(coin, direction, entry, sl, tp, size, leverage, signal_num,
-                      signal_msg_id=None, balance_before=None):
+                      signal_msg_id=None, balance_before=None, strategy="S1"):
     """Called when a new trade opens. Edits the waiting signal message to live state."""
     t = {
         "coin": coin, "dir": direction, "entry": entry,
@@ -574,8 +681,11 @@ def register_position(coin, direction, entry, sl, tp, size, leverage, signal_num
         "opened_at": datetime.utcnow().isoformat(),
         "msg_id": signal_msg_id,
         "max_adverse_pct": 0.0,
+        "peak_roe_pct": 0.0,
+        "max_drawdown_pct": 0.0,
         "activity": [f"📥 Opened @ ${entry:.5g}"],
         "balance_before": balance_before,
+        "strategy": strategy,
     }
     text = _live_text(t, entry)
     if signal_msg_id:
@@ -593,12 +703,18 @@ def register_position(coin, direction, entry, sl, tp, size, leverage, signal_num
 
 
 def update_trail(coin, new_sl, trail_stage):
-    """Persist updated SL and trail_stage to state after a trail fires."""
+    """Persist updated SL and trail_stage to state after a trail fires.
+
+    trail_stage is the rung index from live.py's progressive ladder (rung n
+    locks (n-1) * TRAIL_R_STEP), so the label is derived rather than hardcoded
+    -- the old "1 = breakeven, anything else = +0.5R" form mislabelled every
+    rung above 2 once the ladder became unbounded on 2026-07-26."""
     state = load_state()
     if coin in state.get("tracked", {}):
         state["tracked"][coin]["sl"]          = new_sl
         state["tracked"][coin]["trail_stage"] = trail_stage
-        label = "breakeven" if trail_stage == 1 else "+0.5R"
+        locked = (trail_stage - 1) * TRAIL_R_STEP
+        label  = "breakeven" if locked <= 0 else f"+{locked:g}R"
         acts  = state["tracked"][coin].setdefault("activity", [])
         acts.append(f"🔒 Trail {label} → SL ${new_sl:.5g}")
         state["tracked"][coin]["activity"] = acts[-8:]
@@ -612,6 +728,8 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
     t       = tracked.pop(coin, None)
 
     max_adverse = t.get("max_adverse_pct", 0.0) if t else 0.0
+    max_dd      = t.get("max_drawdown_pct", 0.0) if t else 0.0
+    peak_roe    = t.get("peak_roe_pct", 0.0) if t else 0.0
 
     if t:
         msg_id = t.get("msg_id")
@@ -642,11 +760,26 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
     decided = stats["wins"] + stats["losses"]
     stats["win_rate"]   = round(stats["wins"] / decided * 100, 1) if decided > 0 else 0.0
 
-    # Archive closed trade with max_adverse
+    # Archive the closed trade with every figure the dashboard reports already
+    # computed. Derived once here, at the moment the true entry/exit/size are
+    # known, rather than re-derived later from a partial record -- which is how
+    # the same trade ends up showing two different numbers in two places.
     if t:
+        lev_used = t.get("leverage") or 1
+        entry_px = t.get("entry") or 0
+        d        = t.get("dir", 1)
+        size     = abs(t.get("size") or 0)
+        risk_px  = abs(entry_px - (t.get("sl_orig") or t.get("sl") or entry_px))
         state.setdefault("closed_trades", []).append({
             **t, "exit": exit_price, "result": result,
-            "lev_pct": lev_pct, "max_adverse_pct": max_adverse
+            "lev_pct": lev_pct, "max_adverse_pct": max_adverse,
+            "max_drawdown_pct": max_adverse, "peak_roe_pct": peak_roe,
+            "strategy": (t or {}).get("strategy", "S1"),
+            # price move alone, before leverage
+            "raw_pct": round(lev_pct / lev_used, 4) if lev_used else 0.0,
+            "pnl_usd": round((exit_price - entry_px) * d * size, 2),
+            "rr": round((exit_price - entry_px) * d / risk_px, 3) if risk_px else 0.0,
+            "closed_at": datetime.utcnow().isoformat(),
         })
 
     save_state(state)

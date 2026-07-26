@@ -30,7 +30,7 @@ WATCHLIST = [
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
-MIN_SCORE     = 6         # minimum confluence (max 8) -- initial value, tuned nightly like every prior regime
+MIN_SCORE   = 7         # minimum confluence (max 8) -- initial value, tuned nightly like every prior regime
 TP_RATIO      = 2.0       # 1:2 RR minimum -- Kamran's stated floor
 RISK_PCT      = 0.01
 MAX_TRADES    = 1
@@ -43,6 +43,16 @@ TF_BONUS = {"4h": 2, "1d": 2, "1h": 1, "15m": 0}   # higher-TF zones score a bon
                           # Shared constant -- backtest.py imports this too so the qualification bar
                           # (score_setup() raw score + bonus, compared to MIN_SCORE) can't drift between
                           # live and backtest the way it did once already during this rebuild.
+
+# Progressive risk-free ladder step, in R. Lives here (not in live.py) because
+# tracker.py needs it for trail labels and importing live.py from tracker.py
+# would be circular. See live.py _check_trail for the measured justification.
+#
+# 1R per Kamran's spec ("هر 1RR سیو کنه"): breakeven at +1R, then bank another
+# full R at every further R. A 0.5R step backtested marginally better (+8.95%
+# vs +7.93% account, 50.0% vs 42.9% WR) but that gap is inside the noise at
+# n=22 and the 1R ladder beats the old fixed-TP exit on every axis anyway.
+TRAIL_R_STEP  = 1.0
 
 PATH_CLEAR_PAD  = 0.05    # % padding so a zone touching the entry/target edge isn't falsely "in the way"
 RELIABILITY_MIN_SAMPLE = 3
@@ -182,21 +192,32 @@ def _active_ob_zones(df, top_col, bot_col, flag_col, upto_bar, is_bull):
     were still being treated as live entry triggers. This rebuilds a
     mitigated-or-not view on top of the raw per-bar flags: a bull OB is
     invalidated once close drops below its bottom at any point after it
-    formed; a bear OB once close rises above its top."""
+    formed; a bear OB once close rises above its top.
+
+    Perf note (2026-07-26): originally re-scanned closes[b+1:upto_bar+1] with
+    a fresh .min()/.max() per flagged bar -- O(n_flags * distance-to-now) per
+    call. Live is unaffected (small fixed window), but backtesting calls this
+    ~2x per candle with a growing window, so it went quadratic and multi-hour
+    at extended history. A single suffix min/max array answers every flagged
+    bar's "future extreme" in O(1) after one O(upto_bar) pass -- same result,
+    verified byte-for-byte against the old implementation before landing."""
     flags = df[flag_col].values
     tops  = df[top_col].values
     bots  = df[bot_col].values
-    closes = df["close"].values
+    closes = df["close"].values[:upto_bar + 1]
+
+    suffix_extreme = (np.minimum if is_bull else np.maximum).accumulate(closes[::-1])[::-1]
+
     zones = []
     for b in np.where(flags[:upto_bar + 1])[0]:
         top, bot = tops[b], bots[b]
         if pd.isna(top) or pd.isna(bot):
             continue
-        future = closes[b + 1:upto_bar + 1]
-        if is_bull:
-            mitigated = len(future) > 0 and future.min() < bot
+        if b + 1 > upto_bar:
+            mitigated = False
         else:
-            mitigated = len(future) > 0 and future.max() > top
+            extreme = suffix_extreme[b + 1]
+            mitigated = extreme < bot if is_bull else extreme > top
         if not mitigated:
             zones.append({"top": top, "bottom": bot, "right": b, "mitigated_bar": None})
     return zones
@@ -208,29 +229,33 @@ def _unmitigated_fvg_targets(df, upto_bar, direction):
     price is what a long's rally would revisit and close; a bullish gap
     below is what a short's decline would revisit. fvg() only flags the
     formation bar with no fill-tracking (same gap as order_blocks()), so
-    this checks whether any later close has already closed the gap."""
-    close = df["close"].values
+    this checks whether any later close has already closed the gap.
+
+    Perf note (2026-07-26): same suffix-array fix as _active_ob_zones, same
+    reason -- see that docstring."""
+    close = df["close"].values[:upto_bar + 1]
     high  = df["high"].values
     low   = df["low"].values
     targets = []
+
     if direction == 1:
         flag = df["fvg_bear"].values   # bear = high < low.shift(2): gap [high[b], low[b-2]]
+        suffix_max = np.maximum.accumulate(close[::-1])[::-1]
         for b in np.where(flag[:upto_bar + 1])[0]:
             if b < 2:
                 continue
             gap_bottom, gap_top = high[b], low[b - 2]
-            future = close[b + 1:upto_bar + 1]
-            if len(future) > 0 and future.max() > gap_top:
+            if b + 1 <= upto_bar and suffix_max[b + 1] > gap_top:
                 continue  # already filled
             targets.append(gap_top)
     else:
         flag = df["fvg_bull"].values   # bull = low > high.shift(2): gap [high[b-2], low[b]]
+        suffix_min = np.minimum.accumulate(close[::-1])[::-1]
         for b in np.where(flag[:upto_bar + 1])[0]:
             if b < 2:
                 continue
             gap_top, gap_bottom = low[b], high[b - 2]
-            future = close[b + 1:upto_bar + 1]
-            if len(future) > 0 and future.min() < gap_bottom:
+            if b + 1 <= upto_bar and suffix_min[b + 1] < gap_bottom:
                 continue
             targets.append(gap_bottom)
     return targets
@@ -279,13 +304,35 @@ def _path_clear(price, target_top, target_bottom, direction, obstacle_zones):
     return True
 
 
-def score_setup(df, direction, macro_trend=0):
+def score_setup(df, direction, macro_trend=0, attrition=None, skip_gates=None,
+                tp_r_multiple=None):
     """
     Liquidity-pool target-seeking scoring. Max 8 pts. Fire at >= MIN_SCORE.
     Scoring: base(2) + zone reliability(0-2) + OB/FVG confluence(0-2) + timeframe strength(0-2, added by find_best_setup)
     Returns (score, reasons, sl, tp, leverage, sl_pct, tp_pct)
+
+    attrition: optional dict — if given, incremented at whichever gate causes a
+    FAIL (backtest-only instrumentation to see where candles are getting cut).
+    skip_gates: optional set of gate names to bypass (backtest-only ablation —
+    only the 5 pure-threshold gates are skippable; entry_zone/target_pool are
+    structural, not skippable, since sl/tp are computed FROM their output).
+    tp_r_multiple: optional float — replaces the LP/FVG target with a fixed
+    R multiple off entry (backtest-only exit experiment: same entries, same
+    gates, different exit, so win-rate vs. payoff can be measured cleanly).
+    Implies skipping rr_floor, since the whole point is testing multiples
+    below TP_RATIO. All three no-op when omitted — live call sites unaffected.
     """
     FAIL = (0, [], None, None, None, None, None)
+    skip_gates = skip_gates or ()
+
+    def fail(gate):
+        if attrition is not None:
+            attrition[gate] = attrition.get(gate, 0) + 1
+        return FAIL
+
+    if attrition is not None:
+        attrition["_evaluated"] = attrition.get("_evaluated", 0) + 1
+
     last  = df.iloc[-1]
     price = float(last["real_close"])
     i     = len(df) - 1
@@ -300,8 +347,8 @@ def score_setup(df, direction, macro_trend=0):
     active_bull = _active_zones(bull_zones, i)
 
     # ── HARD GATE: trend alignment (must not be against the higher-TF structure) ──
-    if macro_trend != 0 and macro_trend != direction:
-        return FAIL
+    if macro_trend != 0 and macro_trend != direction and "macro_trend" not in skip_gates:
+        return fail("macro_trend")
 
     # Order block zones (both types, mitigation-filtered) -- computed once,
     # reused for entry detection and as path/confluence obstacles below.
@@ -313,7 +360,7 @@ def score_setup(df, direction, macro_trend=0):
     entry_candidates = (active_bull + ob_bull) if direction == 1 else (active_bear + ob_bear)
     entry_zone = _confirmed_entry_zone(last, entry_candidates, direction)
     if entry_zone is None:
-        return FAIL
+        return fail("entry_zone")
 
     # ── HARD GATE: target liquidity pool -- opposite zone type, farther out,
     # in the trade direction (longs target resting sell-liquidity above =
@@ -321,7 +368,7 @@ def score_setup(df, direction, macro_trend=0):
     target_pool = active_bear if direction == 1 else active_bull
     candidates  = [z for z in target_pool if (z["bottom"] > price if direction == 1 else z["top"] < price)]
     if not candidates:
-        return FAIL
+        return fail("target_pool")
     target = min(candidates, key=lambda z: abs((z["bottom"] if direction == 1 else z["top"]) - price))
 
     # ── HARD GATE: path must be clean of other zones between entry and target.
@@ -330,8 +377,9 @@ def score_setup(df, direction, macro_trend=0):
     # description ("order block ... or FVG ... anything against it"). ──
     obstacles = [z for z in (active_bear + active_bull + ob_bull + ob_bear)
                  if z is not target and z is not entry_zone]
-    if not _path_clear(price, target["top"], target["bottom"], direction, obstacles):
-        return FAIL
+    if not _path_clear(price, target["top"], target["bottom"], direction, obstacles) \
+            and "path_clear" not in skip_gates:
+        return fail("path_clear")
 
     # ── SL: just beyond the entry zone (tight, precise) ──
     if direction == 1:
@@ -344,8 +392,8 @@ def score_setup(df, direction, macro_trend=0):
             sl = price * 1.02
 
     sl_pct = abs(price - sl) / price * 100
-    if sl_pct < 0.4:
-        return FAIL
+    if sl_pct < 0.4 and "sl_floor" not in skip_gates:
+        return fail("sl_floor")
 
     # ── TP: at minimum the target zone's near edge; extend to a further
     # unfilled FVG's far edge if one exists beyond it. The relevant gap is the
@@ -360,15 +408,22 @@ def score_setup(df, direction, macro_trend=0):
         elif direction == -1 and far_edge < tp:
             tp = far_edge
 
+    # Exit experiment: override the LP/FVG target with a fixed R multiple.
+    # Placed after the LP target is resolved (not instead of it) so entries and
+    # every gate stay byte-identical to baseline -- only the exit differs.
+    if tp_r_multiple is not None:
+        tp = price + direction * abs(price - sl) * tp_r_multiple
+
     tp_pct = abs(tp - price) / price * 100
-    if tp_pct < sl_pct * TP_RATIO:
+    if tp_pct < sl_pct * TP_RATIO and "rr_floor" not in skip_gates \
+            and tp_r_multiple is None:
         # Target pool alone doesn't clear the minimum R:R -- reject rather than
         # silently taking a worse trade than Kamran's stated floor.
-        return FAIL
+        return fail("rr_floor")
 
     leverage = min(round(MAX_LEV_LOSS / sl_pct, 1), MAX_LEVERAGE)
-    if sl_pct * leverage > MAX_LEV_LOSS:
-        return FAIL
+    if sl_pct * leverage > MAX_LEV_LOSS and "leverage_cap" not in skip_gates:
+        return fail("leverage_cap")
 
     # ── SCORING (max 6 here; find_best_setup adds up to +2 for timeframe strength) ──
     score = 2
@@ -395,23 +450,45 @@ def score_setup(df, direction, macro_trend=0):
     return max(score, 0), reasons, sl, tp, leverage, round(sl_pct, 3), round(tp_pct, 3)
 
 
+# Highest raw score score_setup() can return before the timeframe bonus:
+# base 2 + zone reliability 2 + OB/FVG confluence 2.
+MAX_RAW_SCORE = 6
+
+SCAN_TIMEFRAMES = ["4h", "1h", "15m"]
+
+
+def _scannable_timeframes():
+    """Timeframes that can still reach MIN_SCORE once TF_BONUS is added.
+
+    A timeframe whose best possible total falls below MIN_SCORE cannot ever
+    produce a signal, so scanning it is pure latency -- and latency is the
+    binding constraint on watchlist size, since every coin/timeframe pair costs
+    two API round-trips inside the hourly candle window. At MIN_SCORE=7 this
+    drops 15m (max 6+0=6) and keeps 4h and 1h. Derived rather than hardcoded so
+    it stays correct automatically when the nightly tuner moves MIN_SCORE.
+    """
+    return [tf for tf in SCAN_TIMEFRAMES
+            if MAX_RAW_SCORE + TF_BONUS.get(tf, 0) >= MIN_SCORE]
+
+
 def find_best_setup(open_positions, hour_utc=None):
     """
-    Scan all coins on 4h / 1h / 15m. Return highest-scoring valid setup, or None.
-    Higher timeframes score a bonus (stronger zones, per Kamran's stated
-    preference) -- naturally lets a 4h-sourced setup outrank an equivalent
-    1h/15m one when both qualify.
+    Scan all coins on every timeframe that can still reach MIN_SCORE. Return
+    highest-scoring valid setup, or None. Higher timeframes score a bonus
+    (stronger zones, per Kamran's stated preference) -- naturally lets a
+    4h-sourced setup outrank an equivalent 1h/15m one when both qualify.
     """
     if hour_utc is not None and not in_session(hour_utc):
         return None
 
     best       = None
     best_score = MIN_SCORE - 1
+    timeframes = _scannable_timeframes()
 
     for coin in WATCHLIST:
         if coin in open_positions:
             continue
-        for tf in ["4h", "1h", "15m"]:
+        for tf in timeframes:
             try:
                 df = build_df(coin, tf, 600)
                 if df is None:

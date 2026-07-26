@@ -1,0 +1,183 @@
+"""
+Backtest harness for strategy2 (mean reversion).
+
+Same simplifications and conservative choices as backtest.py -- SL assumed to
+fill first when a single bar covers both SL and TP, one position per coin, fees
+modelled explicitly -- so the two strategies' numbers are directly comparable.
+"""
+import sys
+import pandas as pd
+
+import strategy2 as s2
+
+TAKER_FEE = 0.00035
+
+
+def backtest_coin(coin, tf="1h", bars=5000, start=None, end=None,
+                  trail_start_r=None, trail_step_r=0.5,
+                  partial_at_r=None, partial_pct=0.5):
+    """Walk history through strategy2.signal(), simulating fills.
+
+    trail_start_r: when set, the fixed take-profit is replaced by a progressive
+    stop. Reaching trail_start_r moves the stop to breakeven; every further
+    trail_step_r of favourable excursion ratchets it up by one step, and the
+    position exits only when that stop is taken out -- so a runner is never
+    capped. Default None keeps the fixed-TP behaviour every earlier number in
+    this file was measured with.
+
+    partial_at_r: scale out instead. On reaching this level, partial_pct of the
+    position is banked there and the REMAINDER's stop is locked at the same
+    level, then ratcheted up every trail_step_r. Because the remainder can only
+    ever exit at or above that lock, the trade's total return is bounded below
+    by partial_at_r once reached -- it is a free option on further upside, not
+    a trade of certain profit for uncertain profit (which is what trail_start_r
+    does, and which measured worse: same net, far lower win rate).
+    Fees are unchanged: two partial exits sum to the same notional as one.
+    """
+    df = s2.build_df(coin, tf, bars=bars)
+    if df is None or len(df) < 100:
+        return []
+    if start is not None:
+        df = df[df.index >= start]
+    if end is not None:
+        df = df[df.index < end]
+    if len(df) < 50:
+        return []
+
+    trades, open_t = [], None
+    for i in range(len(df)):
+        row = df.iloc[i]
+        if open_t:
+            d = open_t["direction"]
+
+            # Max adverse excursion: how far the trade went against us before it
+            # resolved. Recorded per trade because the aggregate win rate hides
+            # it entirely -- a winner that first ran 0.9R against the stop is a
+            # very different trade from one that never dipped.
+            worst = row["low"] if d == 1 else row["high"]
+            adverse = (open_t["entry"] - worst) * d
+            if adverse > open_t["mae_abs"]:
+                open_t["mae_abs"] = adverse
+
+            # Stop is always tested against where it stood at the start of the
+            # bar, before this bar's high is allowed to ratchet it -- otherwise
+            # the same candle both raises the stop and is judged against the
+            # raised value, which is lookahead.
+            hit_sl = (row["low"] <= open_t["sl"]) if d == 1 else (row["high"] >= open_t["sl"])
+            if hit_sl:                      # SL first on ambiguity, as in backtest.py
+                res = "sl" if open_t["sl"] == open_t["sl_orig"] else "trail"
+                if open_t.get("scaled"):
+                    # Blended outcome: partial_pct banked at the scale-out level,
+                    # the rest exiting at wherever the ratchet had reached.
+                    total_r = (partial_pct * partial_at_r
+                               + (1 - partial_pct) * open_t["locked_r"])
+                    res = "partial+trail"
+                else:
+                    total_r = (open_t["sl"] - open_t["entry"]) * d / open_t["R"]
+                trades.append({**open_t, "exit": open_t["sl"], "result": res,
+                               "total_r": round(total_r, 4), "close_time": row.name})
+                open_t = None
+                continue
+
+            if partial_at_r:
+                R = open_t["R"]
+                extreme = row["high"] if d == 1 else row["low"]
+                mfe_r = (extreme - open_t["entry"]) * d / R
+                if mfe_r >= partial_at_r:
+                    if not open_t["scaled"]:
+                        open_t["scaled"] = True          # bank partial_pct at the level
+                    # Remainder's stop: locked at partial_at_r, then ratcheted.
+                    rung   = int((mfe_r - partial_at_r) / trail_step_r)
+                    locked = partial_at_r + rung * trail_step_r
+                    new_sl = open_t["entry"] + d * locked * R
+                    if (new_sl > open_t["sl"]) if d == 1 else (new_sl < open_t["sl"]):
+                        open_t["sl"] = new_sl
+                        open_t["locked_r"] = locked
+                continue
+
+            if trail_start_r:
+                R = open_t["R"]
+                extreme = row["high"] if d == 1 else row["low"]
+                mfe_r = (extreme - open_t["entry"]) * d / R
+                if mfe_r >= trail_start_r:
+                    # rung 0 = breakeven at trail_start_r, then one step per
+                    # trail_step_r beyond it.
+                    rung = int((mfe_r - trail_start_r) / trail_step_r)
+                    locked = rung * trail_step_r
+                    new_sl = open_t["entry"] + d * locked * R
+                    if (new_sl > open_t["sl"]) if d == 1 else (new_sl < open_t["sl"]):
+                        open_t["sl"] = new_sl
+                        open_t["max_rung"] = rung
+                continue
+
+            hit_tp = (row["high"] >= open_t["tp"]) if d == 1 else (row["low"] <= open_t["tp"])
+            if hit_tp:
+                total_r = (open_t["tp"] - open_t["entry"]) * d / open_t["R"]
+                trades.append({**open_t, "exit": open_t["tp"], "result": "tp",
+                               "total_r": round(total_r, 4), "close_time": row.name})
+                open_t = None
+            continue
+
+        sig = s2.signal(df, i)
+        if sig:
+            open_t = {**sig, "coin": coin, "tf": tf, "open_time": row.name,
+                      "mae_abs": 0.0, "sl_orig": sig["sl"],
+                      "R": abs(sig["entry"] - sig["sl"]), "max_rung": 0,
+                      "scaled": False, "locked_r": 0.0}
+    return trades
+
+
+def r_pct(t, fee=0.0):
+    """Leveraged % for a trade. Uses total_r when present so a scaled-out trade
+    (part banked at the target, part exiting on the ratchet) is measured as the
+    blend of its two legs rather than as a single fill."""
+    if t.get("total_r") is not None:
+        r_as_pct = abs(t["entry"] - t["sl_orig"]) / t["entry"]
+        gross = t["total_r"] * r_as_pct * 100 * t["leverage"]
+    else:
+        raw = (t["exit"] - t["entry"]) / t["entry"]
+        gross = raw * 100 * t["direction"] * t["leverage"]
+    return gross - (fee * 2 * t["leverage"] * 100 if fee else 0.0)
+
+
+def summarize(trades, label=""):
+    if not trades:
+        return f"{label:<28} no trades"
+    df = pd.DataFrame(trades)
+    df["gross"] = df.apply(lambda r: r_pct(r), axis=1)
+    df["net"]   = df.apply(lambda r: r_pct(r, TAKER_FEE), axis=1)
+    df["acct"]  = df["net"] / 20
+    df = df.sort_values("open_time")
+    eq = df["acct"].cumsum()
+    dd = (eq - eq.cummax()).min()
+    months = max((df["open_time"].max() - df["open_time"].min()).days / 30.44, 0.1)
+    wr = (df["net"] > 0).mean() * 100
+    s = df["acct"].sort_values(ascending=False)
+    return (f"{label:<28}n={len(df):<5}WR={wr:>5.1f}%  /mo={len(df)/months:>5.1f}  "
+            f"net={df['acct'].sum():+7.2f}%  maxDD={dd:>6.2f}%  "
+            f"ex-top5={s.iloc[5:].sum():+7.2f}%")
+
+
+if __name__ == "__main__":
+    coins = sys.argv[1:] or ["BTC", "ETH", "SOL", "AVAX", "SUI", "DOGE", "BNB",
+                             "AAVE", "ARB", "ADA", "WLD", "TIA", "INJ", "NEAR",
+                             "APT", "OP", "ATOM", "XLM", "FIL", "LDO"]
+    tf = "1h"
+    allt = []
+    for c in coins:
+        try:
+            allt += backtest_coin(c, tf, bars=5000)
+        except Exception as e:
+            print(f"ERR {c}: {str(e)[:60]}", flush=True)
+    if not allt:
+        print("no trades at all")
+        sys.exit()
+
+    df = pd.DataFrame(allt)
+    mid = df["open_time"].min() + (df["open_time"].max() - df["open_time"].min()) / 2
+    print(f"=== STRATEGY 2 (mean reversion) — {len(coins)} coins, {tf}, fees included ===")
+    print(f"span {df['open_time'].min()} .. {df['open_time'].max()}   split at {mid}")
+    print()
+    print(summarize(allt, "ALL"))
+    print(summarize([t for t in allt if t["open_time"] < mid],  "  in-sample (older half)"))
+    print(summarize([t for t in allt if t["open_time"] >= mid], "  OUT-OF-SAMPLE (newer)"))

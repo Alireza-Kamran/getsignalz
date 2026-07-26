@@ -12,6 +12,17 @@ bot.log
 .review_msg_id
 .signal_count
 .night_report.json
+# Per-strategy runtime journals
+journal_s2.json
+
+# Pre-reset state backups (kept locally, not part of the repo)
+journal_pre_reset_*.json
+state_pre_reset_*.json
+
+# Generated backtest reports — regenerate with s2_report.py
+s2_backtest_trades.csv
+s2_backtest_monthly.txt
+
 
 # Python artifacts
 __pycache__/

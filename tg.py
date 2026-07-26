@@ -56,10 +56,31 @@ def dm_owner(text: str):
         print(f"[TG] DM failed: {e}")
 
 
+def dm_owner_file(path, caption=""):
+    """Send a file to the owner DM. Used for per-trade backtest exports, which
+    are far too long to survive Telegram's message length limit."""
+    try:
+        with open(path, "rb") as fh:
+            r = requests.post(
+                f"{BASE_URL}/sendDocument",
+                data={"chat_id": OWNER_ID, "caption": caption[:1024],
+                      "parse_mode": "HTML"},
+                files={"document": fh},
+                timeout=60,
+            )
+        ok = r.json().get("ok", False)
+        if not ok:
+            print(f"[TG] file send rejected: {r.text[:200]}")
+        return ok
+    except Exception as e:
+        print(f"[TG] file send failed: {e}")
+        return False
+
+
 # ── Signal post — single message, three states ────────────────────────────────
 
 def send_signal(coin, direction, score, price, sl, tp, reasons,
-                account_val, risk_usd, tf="1h", leverage=10):
+                account_val, risk_usd, tf="1h", leverage=10, strategy="S1"):
     """Post the signal as 'waiting for entry'. Returns (sig_num, msg_id)."""
     side     = "LONG 🟢" if direction == 1 else "SHORT 🔴"
 
@@ -71,13 +92,18 @@ def send_signal(coin, direction, score, price, sl, tp, reasons,
 
     reasons_txt = "\n".join(f"  ✅ {r}" for r in reasons)
     num = _next_signal_num()
+    # Strategy 2 has no confluence score -- its entries are threshold-based, so
+    # printing "0/8" would read as a terrible signal rather than a different kind.
+    strat_name = "Mean-Reversion" if strategy == "S2" else "Liquidity-Pool"
+    score_txt  = f"Score: {score}/8  ·  " if strategy == "S1" else ""
 
     msg = (
         f"<b>{coin} {side}  #Signal{num}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📍 <b>⏳ WAITING FOR ENTRY</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Score: {score}/8  ·  {tf}  ·  <b>{leverage}x</b>\n"
+        f"🧠 <i>{strat_name}</i>\n"
+        f"📊 {score_txt}{tf}  ·  <b>{leverage}x</b>\n"
         f"💰 Entry:  <code>${price:.5g}</code>\n"
         f"🛑 SL:     <code>${sl:.5g}</code>  →  <b>-{lev_loss:.1f}%</b>\n"
         f"🎯 TP:     <code>${tp:.5g}</code>  →  <b>+{lev_gain:.1f}%</b>\n"
@@ -91,7 +117,8 @@ def send_signal(coin, direction, score, price, sl, tp, reasons,
 # ── Private DMs to owner ──────────────────────────────────────────────────────
 
 def dm_trade_close(coin, direction, entry, exit_px, lev_pct, hit,
-                   balance_before, balance_after, stats, max_adverse_pct=None, size=0):
+                   balance_before, balance_after, stats, max_adverse_pct=None, size=0,
+                   max_drawdown_pct=None, peak_roe_pct=None):
     side    = "LONG 🟢" if direction == 1 else "SHORT 🔴"
     won     = hit == "tp"
     emoji   = "✅" if won else "❌"
@@ -99,7 +126,14 @@ def dm_trade_close(coin, direction, entry, exit_px, lev_pct, hit,
     # Dollar PnL from the trade itself (not balance diff, which can be skewed by other positions)
     raw_usd = (exit_px - entry) * direction * abs(size)
     usd_s   = f"  ({'+' if raw_usd >= 0 else '-'}${abs(raw_usd):.2f})"
-    adv_s   = f"  📉 Max adverse: <b>{max_adverse_pct:.1f}%</b>\n" if max_adverse_pct is not None else ""
+    # Peak + drawdown describe the ride; max-adverse alone said nothing about a
+    # trade that ran far into profit and gave most of it back.
+    parts = []
+    if peak_roe_pct:
+        parts.append(f"  📈 Peak:  <b>+{peak_roe_pct:.1f}%</b>")
+    if max_adverse_pct is not None and max_adverse_pct < 0:
+        parts.append(f"  📉 Max drawdown:  <b>{max_adverse_pct:.1f}%</b>")
+    adv_s = ("\n".join(parts) + "\n") if parts else ""
     dm_owner(
         f"{emoji} <b>CLOSED — {coin} {side}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"

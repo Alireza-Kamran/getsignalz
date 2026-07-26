@@ -29,6 +29,15 @@ PROMPT='You are the brain of GetSignalz AI — a self-improving crypto trading b
 
 Tonight is your nightly improvement session. You think like a professional trader who has been trading for 10 years. You study your own performance ruthlessly, identify weaknesses, and fix them. You do not wait for instructions. You evolve.
 
+CRITICAL — this is a non-interactive, one-shot session (claude -p). Nobody is
+watching it and it cannot be resumed after your turn ends. NEVER run a bash
+command in the background (no run_in_background, no `&`, no "I will resume
+once this finishes"). If something like a backtest is slow, run it
+synchronously and wait for it to finish before continuing — a command that
+takes a few minutes is fine; a command you never wait for means the session
+ends with nothing done. Always complete STEP 6 (the report) before your turn
+ends.
+
 ## STEP 1 — Generate your performance report
 
 Run this first:
@@ -144,7 +153,7 @@ You are a professional trader who happened to also be a software engineer. You t
 '
 
 OUT_TMP="$(mktemp)"
-"$CLAUDE_BIN" -p "$PROMPT" > "$OUT_TMP" 2>&1
+timeout 900 "$CLAUDE_BIN" -p "$PROMPT" > "$OUT_TMP" 2>&1
 RC=$?
 cat "$OUT_TMP" >> "$LOG"
 echo "Session ended: $(date -u '+%H:%M UTC') (exit $RC)" >> "$LOG"

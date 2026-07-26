@@ -43,8 +43,9 @@ MAX_CHANGES = 12
 MAX_SCORE = 8
 
 # Full brain runs (~37K-token prompt + detailed JSON reply) legitimately take
-# ~5 min; 300s left no headroom and tripped on heavier nights. 10 min is safe.
-BRAIN_TIMEOUT = 600
+# ~5 min; 300s and 900s both proved too tight under load (timed out
+# 2026-07-26 with no partial output). 1 hour gives generous headroom.
+BRAIN_TIMEOUT = 3600
 
 
 def _read(name: str) -> str:
