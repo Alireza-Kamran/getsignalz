@@ -463,7 +463,7 @@ def _scannable_timeframes():
     A timeframe whose best possible total falls below MIN_SCORE cannot ever
     produce a signal, so scanning it is pure latency -- and latency is the
     binding constraint on watchlist size, since every coin/timeframe pair costs
-    two API round-trips inside the hourly candle window. At MIN_SCORE=7 this
+    two API round-trips inside the hourly candle window. At MIN_SCORE of 7 this
     drops 15m (max 6+0=6) and keeps 4h and 1h. Derived rather than hardcoded so
     it stays correct automatically when the nightly tuner moves MIN_SCORE.
     """

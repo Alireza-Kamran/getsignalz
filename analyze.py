@@ -359,13 +359,17 @@ def apply_config_to_trader():
     import re
     # Replace WATCHLIST
     code = re.sub(
-        r'WATCHLIST = \[.*?\]',
+        r'^WATCHLIST = \[.*?\]',
         f'WATCHLIST = {wl_str}',
-        code, flags=re.DOTALL
+        code, flags=re.DOTALL | re.MULTILINE
     )
 
     # Replace MIN_SCORE
-    code = re.sub(r'MIN_SCORE\s*=\s*\d+', f'MIN_SCORE   = {config["min_score"]}', code)
+    # Anchored to the start of a line: an unanchored pattern also rewrites
+    # mentions of MIN_SCORE inside comments and docstrings, which is how a
+    # 2026-07-28 run silently mangled _scannable_timeframes()'s docstring.
+    code = re.sub(r'^MIN_SCORE\s*=\s*\d+', f'MIN_SCORE   = {config["min_score"]}',
+                  code, flags=re.MULTILINE)
 
     with open(trader_path, "w") as f:
         f.write(code)

@@ -252,6 +252,36 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
     }
 
 
+def get_close_fill(coin, since_ms=0):
+    """Size-weighted average price of the fills that CLOSED `coin`, or None.
+
+    The bot notices a position is gone up to POLL seconds after the exchange
+    filled it, so reading the current mid at that moment records wherever the
+    market drifted to in the meantime -- not the price actually traded. On the
+    first live strategy-2 trade (ARB, 2026-07-27) the stop filled at 0.07817 but
+    the mid 22s later was 0.07767, and the journal, the owner DM and the public
+    channel post all recorded -19.4% for a trade that really lost -13.1%.
+    Losses are biased worst by this: price keeps running after a stop.
+
+    Returns None when no closing fill can be attributed, so callers can fall
+    back to the old mid-price behaviour rather than record a zero.
+    """
+    info, _ = _clients()
+    fills = _hl_call(info.user_fills, ACCOUNT_ADDRESS) or []
+    sz_sum = notional = 0.0
+    for f in fills:
+        if f.get("coin") != coin or f.get("time", 0) < since_ms:
+            continue
+        if not str(f.get("dir", "")).startswith("Close"):
+            continue
+        sz = abs(float(f.get("sz", 0) or 0))
+        if sz <= 0:
+            continue
+        sz_sum   += sz
+        notional += sz * float(f.get("px", 0) or 0)
+    return notional / sz_sum if sz_sum else None
+
+
 def close_trade(coin):
     _, exchange = _clients()
     result = exchange.market_close(coin)

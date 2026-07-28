@@ -2,6 +2,57 @@
 
 All nightly improvements are logged here automatically.
 
+## v1.20.0 — 2026-07-28 — TRUE FILL PRICES + 24/7 COVERAGE FOR STRATEGY 2
+
+**Stats:** 1 live trade (ARB, SL). Recorded P&L corrected -19.4% -> -13.1% by this release.
+
+**Critical fix — closed trades were recorded at the wrong price.**
+`live._check_closed()` took the exit price from `get_price(coin)`: the current mid at
+the moment the bot noticed the position had gone, up to POLL=20s after the exchange
+actually filled it. The first live strategy-2 trade exposed it. ARB's stop filled at
+0.07817 (confirmed against Hyperliquid `user_fills`), but the mid 22 seconds later was
+0.07767 — so the journal, the owner DM and the public channel post all reported a
+-19.4% loss on a trade that really lost -13.1%, a 48% overstatement. The bias is
+systematically worst on losses, because price keeps running after a stop is taken.
+- New `executor.get_close_fill(coin, since_ms)` — size-weighted average of the fills
+  that actually closed the position, or `None` when none can be attributed.
+- New `live._exit_price()` uses it and falls back to the old mid behaviour on any
+  failure, so a fills-API outage degrades to the previous accuracy instead of erroring.
+- The stored ARB record was corrected in `journal.json`, `state.json` and
+  `journal_s2.json` (each row keeps an `exit_corrected` note). Balance-derived stats
+  (max drawdown 1.58%) were already right, which confirms the bug was narrowly the
+  exit price and not the position accounting.
+
+**Strategy 2 now scans on every hour, not just the session window.**
+S2 was validated on every 1h bar 24/7, but its block sat behind `in_session()` — a
+strategy-1 inheritance — so it only ran 11:00-23:59 UTC and produced 0.39 signals/day
+against the >=1-signal-per-2-days requirement that is the entire reason S2 exists.
+Moved above the gate: 0.53/day. Stated plainly, because it matters: the newly enabled
+hours are the *weakest* block measured (n=30, WR 56.7%, EV +0.199%/trade, t=0.99 —
+positive but statistically indistinguishable from zero) versus 11-24 (n=80, WR 67.5%,
+EV +0.655%, t=4.43). This buys frequency at roughly break-even expectancy; it is not
+an edge improvement, and it is the first thing to reconsider if live results disappoint.
+
+**Position management no longer freezes during quiet hours.**
+`_check_closed`/`_check_trail`/`_check_trail_s2` sat behind the 02:00-04:00 gate, and
+that gate slept 600s. S2 exits *exclusively* through its stop ratchet, so an open trade
+could not lock in profit for two hours a night. Management now runs ahead of the gate at
+the normal 20s poll; the gate still pauses scanning, as intended, and logs once per night
+instead of every cycle. Capital was never at risk here — the resting exchange stop always
+sits underneath — this was lost upside only.
+
+**Startup banner reported the retired engine.** It printed strategy 1's coin count, min
+score and session window even with S1 disabled, so the log advertised a session window
+the live engine no longer obeys. Now reports both engines and their real state.
+
+**No strategy parameter changed.** Stretch / ADX / RSI-depth buckets over 110 backtested
+trades show no actionable gradient. Notably the 4.0+ ATR stretch bucket that the live ARB
+loss came from is the *best* one (+0.818%/trade), so that loss does not indict the entry
+filter — it lost exactly its 1R budget (-0.98% of account against 1.0% risked), which is
+the sizing working correctly.
+
+---
+
 ## v1.2.7 -- 2026-06-19
 
 **Stats:** 33 trades, WR: 32%, P&L: +339.7%

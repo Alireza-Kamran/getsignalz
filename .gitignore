@@ -43,3 +43,6 @@ claude_brain.py
 .vscode/
 *.swp
 *.swo
+
+# dated safety backups from nightly self-learn sessions
+*.bak_*

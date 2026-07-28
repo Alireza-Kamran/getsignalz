@@ -9,7 +9,8 @@ from loguru import logger
 from trader import (find_best_setup, quick_state, RISK_PCT, MAX_TRADES,
                     WATCHLIST, MIN_SCORE, TP_RATIO, TRAIL_R_STEP,
                     in_session, SESSION_START, SESSION_END)
-from executor import get_account_value, get_positions, get_mids, open_trade, get_price, update_sl
+from executor import (get_account_value, get_positions, get_mids, open_trade,
+                      get_price, update_sl, get_close_fill)
 from journal import log_signal, log_trade_open, log_trade_close
 from review  import (should_quiet, should_nightly_review, should_weekly_review,
                      nightly_review, weekly_review, version_push)
@@ -43,6 +44,7 @@ _cooldown_until = {}   # coin -> epoch-seconds when 1h SL cooldown expires
 _nightly_done  = None
 _weekly_done   = None
 _version_done  = None
+_quiet_logged  = None   # date the quiet-hours notice was last logged
 
 
 
@@ -259,12 +261,34 @@ def _s2_report(header=""):
     )
 
 
+def _exit_price(coin, t):
+    """Price a closed trade actually exited at, falling back to the current mid.
+
+    See executor.get_close_fill for why the mid is not good enough: it is up to
+    POLL seconds stale at the moment the bot notices the position is gone, and
+    that staleness systematically overstates losses.
+    """
+    try:
+        opened, since = t.get("opened_at"), 0
+        if opened is not None:
+            if opened.tzinfo is None:
+                opened = opened.replace(tzinfo=timezone.utc)
+            since = int(opened.timestamp() * 1000)
+        px = get_close_fill(coin, since)
+        if px:
+            return px
+        logger.warning(f"{coin}: no closing fill found — using mid price")
+    except Exception as e:
+        logger.warning(f"{coin}: close-fill lookup failed ({e}) — using mid price")
+    return get_price(coin)
+
+
 def _check_closed(positions, account_val):
     """Detect closed trades and post results."""
     for coin in list(_open_trades.keys()):
         if coin not in positions:
             t            = _open_trades.pop(coin)
-            exit_px      = get_price(coin)
+            exit_px      = _exit_price(coin, t)
             direction    = t["dir"]
             entry        = t["entry"]
             balance_before = t.get("balance_before", account_val)
@@ -368,7 +392,7 @@ def _release_lock():
 
 def run():
     import os, signal as _signal
-    global _nightly_done, _weekly_done, _version_done
+    global _nightly_done, _weekly_done, _version_done, _quiet_logged
 
     _acquire_lock()
     # Clean up lockfile on exit
@@ -378,8 +402,19 @@ def run():
 
     logger.info("="*55)
     logger.info("  GETSIGNALZ AI — ONLINE")
-    logger.info(f"  Coins: {len(WATCHLIST)} | TFs: 15m/1h/4h | Min score: {MIN_SCORE}/8")
-    logger.info(f"  Session: {SESSION_START:02d}:00-{SESSION_END:02d}:00 UTC | Quiet: 02:00-04:00 UTC")
+    # Banner reports the LIVE engine first. It used to print only strategy 1
+    # numbers, which stopped being true when S1 was disabled -- an operator
+    # reading the log saw a session window the live engine no longer obeys.
+    if S1_ENABLED:
+        logger.info(f"  S1 structural: {len(WATCHLIST)} coins | 15m/1h/4h | "
+                    f"min score {MIN_SCORE}/8 | session "
+                    f"{SESSION_START:02d}:00-{SESSION_END:02d}:00 UTC")
+    else:
+        logger.info("  S1 structural: DISABLED")
+    logger.info(f"  S2 mean-reversion: {len(strategy2.WATCHLIST)} coins | "
+                f"{strategy2.TF} | RSI {strategy2.RSI_OVERSOLD}/"
+                f"{strategy2.RSI_OVERBOUGHT} | ADX<{strategy2.MAX_ADX} | all hours")
+    logger.info("  Quiet: 02:00-04:00 UTC (scanning only)")
     logger.info("="*55)
 
     tracker.start()
@@ -460,12 +495,6 @@ def run():
             now_utc = datetime.now(timezone.utc)
             h, m, wd = now_utc.hour, now_utc.minute, now_utc.weekday()
 
-            # ── Quiet hours ──────────────────────────────────────────────────
-            if should_quiet(h):
-                logger.info("Quiet hours (2-4 AM) — resting")
-                time.sleep(600)
-                continue
-
             # ── Version push fallback (catches missed pushes after restarts) ──
             import os as _os
             if (h >= 4 and _version_done != now_utc.date()
@@ -496,11 +525,26 @@ def run():
             mids        = get_mids() if _open_trades else {}
 
             # ── Trail stop + closed trade detection ───────────────────────────
+            # Deliberately ahead of the quiet-hours gate below: that rule pauses
+            # *scanning*, not position management. Strategy 2 exits exclusively
+            # through this ratchet, so freezing it 02:00-04:00 meant an open
+            # trade could not lock in profit for two hours a night. Lost upside
+            # rather than lost capital -- the resting exchange stop always sits
+            # underneath -- but there is no reason to give it away.
             _check_closed(positions, account_val)
             if _open_trades:
                 if S1_ENABLED:
                     _check_trail(positions, account_val, mids=mids)
                 _check_trail_s2(positions, mids=mids)
+
+            # ── Quiet hours ──────────────────────────────────────────────────
+            if should_quiet(h):
+                if _quiet_logged != now_utc.date():
+                    _quiet_logged = now_utc.date()
+                    logger.info("Quiet hours (2-4 AM) — scanning paused, "
+                                "open positions still managed")
+                time.sleep(POLL)
+                continue
 
             # ── New 1h candle? ────────────────────────────────────────────────
             now_ts = _candle_ts()
@@ -528,7 +572,96 @@ def run():
                                 f"ADX {s['adx']:.0f}  SSL {s['ssl']:+d}{score_tag}")
             # Scan summary stays in logs only — no channel post
 
-            # ── Skip trading if off-session ───────────────────────────────────
+            # ── Strategy 2: mean reversion (live, official) ───────────────────
+            # Runs on its own risk budget and its own watchlist/timeframe, so it
+            # neither blocks nor is blocked by the structural system below.
+            # Promoted out of shadow mode 2026-07-26: signals now post to the
+            # channel, register a live tracker message, and count in the main
+            # journal and stats exactly like strategy 1. journal_s2.json is
+            # still written alongside so the two strategies stay separable when
+            # reviewing which one is carrying the record.
+            try:
+                s2_at_risk = sum(1 for c, t in _open_trades.items()
+                                 if t.get("strategy") == "S2")
+                if s2_at_risk < strategy2.MAX_TRADES:
+                    s2_open = {**positions, **{c: {} for c in _open_trades}}
+                    s2_best = strategy2.find_setup(s2_open)
+                    # Logged even when empty: a scanner that only speaks when it
+                    # fires is indistinguishable from a broken one, and this runs
+                    # unattended for weeks while shadow data accumulates.
+                    if not s2_best:
+                        logger.info(f"[S2] scanned {len(strategy2.WATCHLIST)} coins "
+                                    f"— no mean-reversion setup")
+                    if s2_best:
+                        c2  = s2_best["coin"]
+                        dir2 = s2_best["direction"]
+                        logger.info(
+                            f"[S2] SIGNAL {c2} {'LONG' if dir2 == 1 else 'SHORT'} "
+                            f"rsi={s2_best['rsi']} adx={s2_best['adx']} "
+                            f"stretch={s2_best['stretch']}"
+                        )
+                        risk2 = account_val * RISK_PCT
+                        res2  = open_trade(
+                            coin=c2, direction=dir2, risk_usd=risk2,
+                            sl_price=s2_best["sl"], tp_price=s2_best["tp"],
+                            leverage=s2_best["leverage"], tp_ratio=strategy2.TP_R,
+                        )
+                        reasons2 = [
+                            f"RSI {s2_best['rsi']} "
+                            f"({'oversold' if dir2 == 1 else 'overbought'})",
+                            f"{abs(s2_best['stretch']):.1f} ATR from mean",
+                            f"ADX {s2_best['adx']} (ranging, not trending)",
+                        ]
+                        log_signal(c2, dir2, 0, reasons2, s2_best["entry"],
+                                   s2_best["sl"], s2_best["tp"], strategy2.TF,
+                                   adx=s2_best["adx"], rsi=s2_best["rsi"],
+                                   ssl=None, session_hour=h)
+                        sig2, sig2_mid = tg.send_signal(
+                            coin=c2, direction=dir2, score=0, price=s2_best["entry"],
+                            sl=s2_best["sl"], tp=s2_best["tp"], reasons=reasons2,
+                            account_val=account_val, risk_usd=risk2,
+                            tf=strategy2.TF, leverage=s2_best["leverage"],
+                            strategy="S2",
+                        )
+                        if res2:
+                            hl2   = get_positions().get(c2, {})
+                            entry2 = hl2.get("entry", res2["entry"])
+                            size2  = abs(hl2.get("size", res2["size"]))
+                            lev2   = hl2.get("leverage", s2_best["leverage"])
+                            _open_trades[c2] = {
+                                "dir": dir2, "entry": entry2,
+                                "sl": res2["sl"], "tp": res2["tp"],
+                                "size": size2, "leverage": lev2,
+                                "opened_at": datetime.utcnow(), "trail_stage": 0,
+                                "signal_num": sig2, "balance_before": account_val,
+                                "max_adverse_pct": 0.0, "strategy": "S2",
+                                # R is measured off the ORIGINAL stop, so the
+                                # ladder keeps its reference once the stop moves.
+                                "sl_orig": res2["sl"], "locked_r": 0.0,
+                                "R": abs(entry2 - res2["sl"]),
+                            }
+                            log_trade_open(c2, dir2, entry2, res2["sl"],
+                                           res2["tp"], size2, lev2)
+                            tracker.register_position(
+                                coin=c2, direction=dir2, entry=entry2,
+                                sl=res2["sl"], tp=res2["tp"], size=size2,
+                                leverage=lev2, signal_num=sig2,
+                                signal_msg_id=sig2_mid,
+                                balance_before=account_val, strategy="S2",
+                            )
+            except Exception as s2_err:
+                logger.error(f"[S2] error: {s2_err}")
+
+            # Strategy 2 runs BEFORE the session gate below, deliberately.
+            # That gate is a strategy-1 inheritance: S1 was a structural system
+            # where session liquidity plausibly mattered. S2 was validated on
+            # every 1h bar, 24/7, and measuring it under the live 11-24 window
+            # (20 coins, 205 days, fees, live ratchet semantics) gave 0.39
+            # signals/day vs 0.53 with the gate lifted -- for no win-rate gain
+            # (69.6% vs 67.0%, noise at this n). 0.39/day misses the >=1 signal
+            # per 2 days this engine exists to deliver.
+
+            # ── Skip trading if off-session (strategy 1 only) ───────────────────────────────────
             if not in_session(h):
                 logger.info("Off-session — not trading")
                 time.sleep(POLL)
@@ -609,85 +742,6 @@ def run():
             elif not S1_ENABLED:
                 logger.info("Strategy 1 disabled — mean-reversion only")
 
-            # ── Strategy 2: mean reversion (live, official) ───────────────────
-            # Runs on its own risk budget and its own watchlist/timeframe, so it
-            # neither blocks nor is blocked by the structural system above.
-            # Promoted out of shadow mode 2026-07-26: signals now post to the
-            # channel, register a live tracker message, and count in the main
-            # journal and stats exactly like strategy 1. journal_s2.json is
-            # still written alongside so the two strategies stay separable when
-            # reviewing which one is carrying the record.
-            try:
-                s2_at_risk = sum(1 for c, t in _open_trades.items()
-                                 if t.get("strategy") == "S2")
-                if s2_at_risk < strategy2.MAX_TRADES:
-                    s2_open = {**positions, **{c: {} for c in _open_trades}}
-                    s2_best = strategy2.find_setup(s2_open)
-                    # Logged even when empty: a scanner that only speaks when it
-                    # fires is indistinguishable from a broken one, and this runs
-                    # unattended for weeks while shadow data accumulates.
-                    if not s2_best:
-                        logger.info(f"[S2] scanned {len(strategy2.WATCHLIST)} coins "
-                                    f"— no mean-reversion setup")
-                    if s2_best:
-                        c2  = s2_best["coin"]
-                        dir2 = s2_best["direction"]
-                        logger.info(
-                            f"[S2] SIGNAL {c2} {'LONG' if dir2 == 1 else 'SHORT'} "
-                            f"rsi={s2_best['rsi']} adx={s2_best['adx']} "
-                            f"stretch={s2_best['stretch']}"
-                        )
-                        risk2 = account_val * RISK_PCT
-                        res2  = open_trade(
-                            coin=c2, direction=dir2, risk_usd=risk2,
-                            sl_price=s2_best["sl"], tp_price=s2_best["tp"],
-                            leverage=s2_best["leverage"], tp_ratio=strategy2.TP_R,
-                        )
-                        reasons2 = [
-                            f"RSI {s2_best['rsi']} "
-                            f"({'oversold' if dir2 == 1 else 'overbought'})",
-                            f"{abs(s2_best['stretch']):.1f} ATR from mean",
-                            f"ADX {s2_best['adx']} (ranging, not trending)",
-                        ]
-                        log_signal(c2, dir2, 0, reasons2, s2_best["entry"],
-                                   s2_best["sl"], s2_best["tp"], strategy2.TF,
-                                   adx=s2_best["adx"], rsi=s2_best["rsi"],
-                                   ssl=None, session_hour=h)
-                        sig2, sig2_mid = tg.send_signal(
-                            coin=c2, direction=dir2, score=0, price=s2_best["entry"],
-                            sl=s2_best["sl"], tp=s2_best["tp"], reasons=reasons2,
-                            account_val=account_val, risk_usd=risk2,
-                            tf=strategy2.TF, leverage=s2_best["leverage"],
-                            strategy="S2",
-                        )
-                        if res2:
-                            hl2   = get_positions().get(c2, {})
-                            entry2 = hl2.get("entry", res2["entry"])
-                            size2  = abs(hl2.get("size", res2["size"]))
-                            lev2   = hl2.get("leverage", s2_best["leverage"])
-                            _open_trades[c2] = {
-                                "dir": dir2, "entry": entry2,
-                                "sl": res2["sl"], "tp": res2["tp"],
-                                "size": size2, "leverage": lev2,
-                                "opened_at": datetime.utcnow(), "trail_stage": 0,
-                                "signal_num": sig2, "balance_before": account_val,
-                                "max_adverse_pct": 0.0, "strategy": "S2",
-                                # R is measured off the ORIGINAL stop, so the
-                                # ladder keeps its reference once the stop moves.
-                                "sl_orig": res2["sl"], "locked_r": 0.0,
-                                "R": abs(entry2 - res2["sl"]),
-                            }
-                            log_trade_open(c2, dir2, entry2, res2["sl"],
-                                           res2["tp"], size2, lev2)
-                            tracker.register_position(
-                                coin=c2, direction=dir2, entry=entry2,
-                                sl=res2["sl"], tp=res2["tp"], size=size2,
-                                leverage=lev2, signal_num=sig2,
-                                signal_msg_id=sig2_mid,
-                                balance_before=account_val, strategy="S2",
-                            )
-            except Exception as s2_err:
-                logger.error(f"[S2] error: {s2_err}")
 
         except KeyboardInterrupt:
             logger.info("Bot stopped")
