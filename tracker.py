@@ -140,8 +140,17 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
     peak_roe  = t.get("peak_roe_pct", 0.0)
 
     side      = "LONG 🟢" if direction == 1 else "SHORT 🔴"
-    now       = datetime.now(timezone.utc)
-    dur_secs  = int((now.replace(tzinfo=None) - opened_at).total_seconds())
+    # A closed trade's duration is entry->exit, a fixed fact. Measuring to "now"
+    # was only ever right because the message happened to be rendered the moment
+    # the trade closed; re-rendering it later (a correction, a rebuild) inflated
+    # the duration without touching anything else, so the message silently drifted.
+    ref = datetime.now(timezone.utc).replace(tzinfo=None)
+    if closed and t.get("closed_at"):
+        try:
+            ref = datetime.fromisoformat(str(t["closed_at"]).replace("Z", ""))
+        except Exception:
+            pass
+    dur_secs  = int((ref - opened_at).total_seconds())
     dur_h     = dur_secs // 3600
     dur_m     = (dur_secs % 3600) // 60
     dur_str   = f"{dur_h}h {dur_m}m" if dur_h > 0 else f"{dur_m}m"
