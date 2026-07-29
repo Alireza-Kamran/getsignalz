@@ -127,7 +127,7 @@ def generate(coin: str, direction: int, entry: float, exit_px: float,
     stats = [
         ("SL",          f"${_fmt(sl)}",          RED),
         ("TP",          f"${_fmt(tp)}",           GREEN),
-        ("Max adverse", f"{max_adverse:.1f}%",    YELLOW if max_adverse < -10 else MUTED),
+        ("Max drawdown", f"{max_adverse:.1f}%",   YELLOW if max_adverse < -10 else MUTED),
         ("Closed",      close_dt,                 MUTED),
     ]
     for i, (label, val, col) in enumerate(stats):

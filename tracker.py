@@ -812,6 +812,9 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
         try:
             import result_card
             opened_at = datetime.fromisoformat(t["opened_at"])
+            # utcnow() is right only while this runs at close time; anything that
+            # regenerates the card later would stamp the wrong close time and an
+            # inflated duration, exactly as the text message did.
             closed_at = datetime.utcnow()
             duration_h = (closed_at - opened_at).total_seconds() / 3600
             card = result_card.generate(
@@ -821,7 +824,14 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
                 duration_h=duration_h, max_adverse=max_adverse,
                 leverage=t.get("leverage", 10), size=t.get("size", 0),
             )
-            _send_photo(card, caption=f"#Signal{t.get('signal_num', 0)}  {coin}")
+            card_mid = _send_photo(card, caption=f"#Signal{t.get('signal_num', 0)}  {coin}")
+            # Stored so the card can be corrected later. Without it, fixing a
+            # published card means probing message ids one by one to find it.
+            if card_mid:
+                for row in state.get("closed_trades", []):
+                    if row.get("signal_num") == t.get("signal_num"):
+                        row["card_msg_id"] = card_mid
+                save_state(state)
         except Exception as e:
             print(f"[tracker] result card error: {e}")
     update_dashboard(state)
