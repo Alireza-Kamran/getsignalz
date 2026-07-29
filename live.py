@@ -705,6 +705,7 @@ def run():
                                 leverage=lev2, signal_num=sig2,
                                 signal_msg_id=sig2_mid,
                                 balance_before=account_val, strategy="S2",
+                                sl_orig=res2["sl"],
                             )
             except Exception as s2_err:
                 logger.error(f"[S2] error: {s2_err}")

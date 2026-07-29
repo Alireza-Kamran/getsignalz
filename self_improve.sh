@@ -153,13 +153,17 @@ You are a professional trader who happened to also be a software engineer. You t
 '
 
 OUT_TMP="$(mktemp)"
-timeout 900 "$CLAUDE_BIN" -p "$PROMPT" > "$OUT_TMP" 2>&1
+timeout 3600 "$CLAUDE_BIN" -p "$PROMPT" > "$OUT_TMP" 2>&1
 RC=$?
 cat "$OUT_TMP" >> "$LOG"
 echo "Session ended: $(date -u '+%H:%M UTC') (exit $RC)" >> "$LOG"
 
 if [ $RC -ne 0 ] || grep -qiE "command not found|oauth session expired|session limit|failed to authenticate" "$OUT_TMP"; then
-    SNIPPET="$(tail -c 500 "$OUT_TMP")"
+    if [ $RC -eq 124 ]; then
+        SNIPPET="Session hit the 60-minute wall clock and was killed (exit 124)."
+    else
+        SNIPPET="$(tail -c 500 "$OUT_TMP")"
+    fi
     python3 - "$SNIPPET" <<'PYEOF' >> "$LOG" 2>&1
 import sys
 sys.path.insert(0, "/root/trade")

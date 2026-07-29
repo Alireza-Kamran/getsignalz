@@ -672,7 +672,8 @@ def _append_activity(coin, msg):
 
 
 def register_position(coin, direction, entry, sl, tp, size, leverage, signal_num,
-                      signal_msg_id=None, balance_before=None, strategy="S1"):
+                      signal_msg_id=None, balance_before=None, strategy="S1",
+                      sl_orig=None):
     """Called when a new trade opens. Edits the waiting signal message to live state."""
     t = {
         "coin": coin, "dir": direction, "entry": entry,
@@ -686,6 +687,11 @@ def register_position(coin, direction, entry, sl, tp, size, leverage, signal_num
         "activity": [f"📥 Opened @ ${entry:.5g}"],
         "balance_before": balance_before,
         "strategy": strategy,
+        # The ORIGINAL stop, kept separate because `sl` is rewritten every time
+        # the ratchet fires. R -- and therefore the realised R:R in the archive
+        # -- must stay measured against the risk actually taken at entry, not
+        # against wherever the stop was dragged to by the time it filled.
+        "sl_orig": sl_orig if sl_orig is not None else sl,
     }
     text = _live_text(t, entry)
     if signal_msg_id:
@@ -728,6 +734,13 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
     t       = tracked.pop(coin, None)
 
     max_adverse = t.get("max_adverse_pct", 0.0) if t else 0.0
+    # The 60s poll can miss the worst tick entirely -- a stop that fills between
+    # two polls leaves max_adverse shallower than the loss actually realised, so
+    # the record claims the trade never went as deep as its own exit (first live
+    # S2 trade: -12.62% "max drawdown" on a -13.13% loss). The realised result is
+    # itself a lower bound on how far the trade went against us.
+    if lev_pct < max_adverse:
+        max_adverse = round(lev_pct, 2)
     max_dd      = t.get("max_drawdown_pct", 0.0) if t else 0.0
     peak_roe    = t.get("peak_roe_pct", 0.0) if t else 0.0
 
