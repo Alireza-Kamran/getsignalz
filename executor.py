@@ -4,6 +4,7 @@ Order execution layer — wraps Hyperliquid SDK for clean trade management.
 import math
 import time
 import logging
+import requests
 from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from eth_account import Account
@@ -16,6 +17,14 @@ TESTNET_URL = "https://api.hyperliquid-testnet.xyz"
 MAINNET_URL = "https://api.hyperliquid.xyz"
 BASE_URL    = TESTNET_URL if USE_TESTNET else MAINNET_URL
 
+# (connect, read) seconds. The Hyperliquid SDK defaults timeout=None, which
+# means requests blocks FOREVER on a half-open socket -- and the API sits
+# behind an nginx that regularly 502s, so half-open sockets do happen. On
+# 2026-07-28 22:05 UTC this froze the entire bot for 4 hours: no scan, no stop
+# ratchet, process still "active (running)" to systemd, main thread parked in a
+# socket read with no timer set. Never build an Info/Exchange without this.
+HTTP_TIMEOUT = (5, 20)
+
 # ── Singleton clients — one shared connection pool for the whole process ──────
 _info_obj     = None
 _exchange_obj = None
@@ -24,8 +33,10 @@ def _clients():
     global _info_obj, _exchange_obj
     if _info_obj is None:
         wallet        = Account.from_key(PRIVATE_KEY)
-        _info_obj     = Info(BASE_URL, skip_ws=True)
-        _exchange_obj = Exchange(wallet, BASE_URL, account_address=ACCOUNT_ADDRESS)
+        _info_obj     = Info(BASE_URL, skip_ws=True, timeout=HTTP_TIMEOUT)
+        _exchange_obj = Exchange(wallet, BASE_URL,
+                                 account_address=ACCOUNT_ADDRESS,
+                                 timeout=HTTP_TIMEOUT)
     return _info_obj, _exchange_obj
 
 
@@ -34,6 +45,20 @@ def _hl_call(fn, *args, retries=4, **kwargs):
     for attempt in range(retries):
         try:
             return fn(*args, **kwargs)
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError) as e:
+            # With HTTP_TIMEOUT set, the failure that used to hang the
+            # process forever now surfaces here instead. Same transient
+            # class as a 502 -- retry rather than abort the cycle.
+            if attempt < retries - 1:
+                wait = 2 ** attempt
+                name = getattr(fn, "__name__", "?")
+                logger.warning(
+                    f"HL API network error ({type(e).__name__}) — "
+                    f"retry in {wait}s ({name})")
+                time.sleep(wait)
+            else:
+                raise
         except Exception as e:
             code = e.args[0] if e.args else 0
             if code in (429, 502, 503, 500) and attempt < retries - 1:

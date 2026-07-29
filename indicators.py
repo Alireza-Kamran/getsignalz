@@ -5,9 +5,14 @@ import time
 
 TESTNET_URL = "https://api.hyperliquid-testnet.xyz"
 
+# See executor.HTTP_TIMEOUT for why this is not optional: the SDK defaults to
+# timeout=None and will block forever on a half-open socket. This module is
+# called once per coin per candle, so it is the most exposed surface of all.
+HTTP_TIMEOUT = (5, 20)
+
 
 def fetch_candles(symbol="ETH", interval="1h", lookback_bars=350):
-    info = Info(TESTNET_URL, skip_ws=True)
+    info = Info(TESTNET_URL, skip_ws=True, timeout=HTTP_TIMEOUT)
     end_ms = int(time.time() * 1000)
     interval_ms = {"1m":60000,"5m":300000,"15m":900000,"1h":3600000,"4h":14400000,"1d":86400000}
     start_ms = end_ms - lookback_bars * interval_ms[interval]

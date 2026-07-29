@@ -2,6 +2,57 @@
 
 All nightly improvements are logged here automatically.
 
+## v1.21.0 — 2026-07-29 — THE BOT WAS FROZEN FOR 4 HOURS AND SYSTEMD SAID IT WAS FINE
+
+**Stats:** 1 live trade (unchanged). Max drawdown 1.58%. No strategy parameter changed.
+
+**Critical fix — a silent, unbounded freeze.**
+`bot.log` had no entry between 2026-07-28 22:01:36 and 2026-07-29 02:07 UTC, while
+`systemctl status` reported `active (running)` throughout. Both the main loop and the
+tracker thread were parked in `wchan=wait_woken` — a blocking socket read with no timer,
+which can never return on its own.
+
+Root cause: `hyperliquid.api.API` defaults `timeout=None` and passes it straight into
+`requests.post`, so a half-open socket blocks forever. `executor.py` built its `Info`
+and `Exchange` without a timeout, and `indicators.py` rebuilt an untimed `Info` on every
+candle fetch (20 coins x hourly — the most exposed surface in the codebase). The API sits
+behind an nginx that 502s regularly, which is exactly what leaves half-open sockets behind.
+- `HTTP_TIMEOUT = (5, 20)` (connect, read) now passed to every `Info`/`Exchange`.
+- `executor._hl_call()` retries `requests` `Timeout`/`ConnectionError` with the same
+  backoff it already used for 429/502/503/500 — that is the failure the timeout surfaces.
+
+**New — hang watchdog (`live.py`).** The main loop calls `_beat()` every iteration; a
+daemon thread checks every 60s and, if the loop has gone silent past its allowance, logs,
+DMs the owner and exits hard so systemd (`Restart=always`, `RestartSec=30`) restarts it
+with open trades restored from `state.json`. Allowance is 900s normally and is widened
+around the calls that legitimately block: `nightly_review()` 4800s (`ai_brain` runs to
+`BRAIN_TIMEOUT=3600`), `weekly_review()` and `version_push()` 1800s. Verified in both
+directions before deploying: fires and exits 1 on a simulated 20-minute stall, and
+survives 75s of healthy heartbeats with no false positive.
+
+**Fix — `review.py`'s `_git()` had no timeout.** `git push` talks to the network. On its
+own the new watchdog would catch a hang there, but `version_push()` runs at the same time
+every night, so it would have become a restart loop rather than a one-off recovery.
+Now `timeout=120` with a synthetic failure result.
+
+**Fix — `_release_lock()` is ownership-aware.** It now only unlinks
+`/tmp/getsignalz.pid` when the file still holds this process's own PID, so a dying
+instance cannot disarm the lock of a newer one. Found while testing the watchdog, which
+deleted the live bot's lockfile from a test subprocess.
+
+**Impact of the outage:** 3 missed candle scans (~0.07 expected signals at the measured
+0.53/day) and the 23:00 UTC nightly review, whose channel daily summary did not post on
+07-28. The book was flat, so no capital was exposed — but strategy 2 exits exclusively
+through its stop ratchet, so an open position would have had that ratchet frozen for the
+full four hours.
+
+**Unchanged, deliberately.** Live evidence is still one closed trade. Per-score win rate,
+confluence attribution, trailing behaviour and coin EV all remain unanswerable, and the
+07-28 bucket study over 110 backtested trades already showed no actionable gradient in
+stretch, ADX or RSI depth. The 20-coin strategy-2 drift check reproduced cleanly
+(24/7 n=121 WR 66.1% +67.73%; deployed n=109 WR 64.2% +57.52%), and
+`apply_config_to_trader()` left `trader.py` byte-identical.
+
 ## v1.20.0 — 2026-07-28 — TRUE FILL PRICES + 24/7 COVERAGE FOR STRATEGY 2
 
 **Stats:** 1 live trade (ARB, SL). Recorded P&L corrected -19.4% -> -13.1% by this release.

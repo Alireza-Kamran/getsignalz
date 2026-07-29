@@ -46,6 +46,52 @@ _weekly_done   = None
 _version_done  = None
 _quiet_logged  = None   # date the quiet-hours notice was last logged
 
+# ── Hang watchdog ─────────────────────────────────────────────────────────────
+# On 2026-07-28 22:05 UTC the bot did nothing at all for 4 hours while systemd
+# still reported it "active (running)": the main thread was parked in a
+# Hyperliquid socket read that carried no timeout, so it never woke up and never
+# raised. Scanning stopped, and had a position been open the S2 stop ratchet --
+# its only exit path other than the resting stop -- would have been frozen too.
+# executor.HTTP_TIMEOUT fixes that specific cause; this catches the whole class.
+# If the loop has not ticked within its allowance the process exits hard and
+# systemd (Restart=always, RestartSec=30) brings it back, restoring open trades
+# from state.json exactly as it does after any other restart.
+_last_tick     = time.time()
+_tick_deadline = 900     # seconds of silence tolerated for an ordinary cycle
+
+
+def _beat(allowance=900):
+    """Mark the main loop alive. Widen `allowance` around known-slow work."""
+    global _last_tick, _tick_deadline
+    _last_tick     = time.time()
+    _tick_deadline = allowance
+
+
+def _watchdog():
+    import os
+    while True:
+        time.sleep(60)
+        stale = time.time() - _last_tick
+        if stale <= _tick_deadline:
+            continue
+        mins  = int(stale // 60)
+        limit = int(_tick_deadline // 60)
+        msg = (f"🚨 Watchdog: main loop stalled {mins} min "
+               f"(limit {limit} min) — restarting the bot.")
+        try:
+            logger.error(msg)
+        except Exception:
+            pass
+        try:
+            tg.dm_owner(msg)
+        except Exception:
+            pass
+        try:
+            _release_lock()
+        except Exception:
+            pass
+        os._exit(1)   # hard exit: a thread stuck in a syscall cannot be unwound
+
 
 
 
@@ -383,10 +429,13 @@ def _acquire_lock():
     open(LOCKFILE, "w").write(str(os.getpid()))
 
 def _release_lock():
+    """Remove the lockfile, but only if this process still owns it."""
     import os
     try:
+        if int(open(LOCKFILE).read().strip()) != os.getpid():
+            return          # a newer instance owns it now -- leave it
         os.unlink(LOCKFILE)
-    except FileNotFoundError:
+    except (FileNotFoundError, ValueError):
         pass
 
 
@@ -399,6 +448,10 @@ def run():
     import atexit
     atexit.register(_release_lock)
     _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
+
+    import threading
+    threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
+    logger.info("Watchdog armed — self-restart if the main loop stalls")
 
     logger.info("="*55)
     logger.info("  GETSIGNALZ AI — ONLINE")
@@ -492,6 +545,7 @@ def run():
 
     while True:
         try:
+            _beat()
             now_utc = datetime.now(timezone.utc)
             h, m, wd = now_utc.hour, now_utc.minute, now_utc.weekday()
 
@@ -500,11 +554,13 @@ def run():
             if (h >= 4 and _version_done != now_utc.date()
                     and _os.path.exists("/root/trade/.night_report.json")):
                 _version_done = now_utc.date()
+                _beat(1800)      # git push can stall on the network
                 version_push()
 
             # ── Nightly review ───────────────────────────────────────────────
             if should_nightly_review(h, m) and _nightly_done != now_utc.date():
                 _nightly_done = now_utc.date()
+                _beat(4800)      # ai_brain runs to BRAIN_TIMEOUT=3600s
                 nightly_review()
                 # Shadow-mode strategy 2 reports separately: its numbers are
                 # deliberately kept out of the main review, which drives the
@@ -517,6 +573,7 @@ def run():
             # ── Weekly review ────────────────────────────────────────────────
             if should_weekly_review(wd, h, m) and _weekly_done != now_utc.isocalendar()[1]:
                 _weekly_done = now_utc.isocalendar()[1]
+                _beat(1800)
                 weekly_review()
 
             # ── Fetch positions + prices (shared singleton connection) ─────────

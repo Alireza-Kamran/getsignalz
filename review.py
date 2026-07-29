@@ -543,10 +543,18 @@ def version_push():
 
         # ── Git commit + push ─────────────────────────────────────────────────
         def _git(*args):
-            return subprocess.run(
-                ["git", "-C", REPO] + list(args),
-                capture_output=True, text=True
-            )
+            # timeout is not optional: `git push` talks to the network,
+            # and a hang here parks the whole main loop. The watchdog in
+            # live.py would eventually restart the bot, but a hang that
+            # reproduces every night turns that into a restart loop.
+            try:
+                return subprocess.run(
+                    ["git", "-C", REPO] + list(args),
+                    capture_output=True, text=True, timeout=120
+                )
+            except subprocess.TimeoutExpired:
+                return subprocess.CompletedProcess(
+                    args, 1, "", "git timed out after 120s")
 
         _git("add", "-u")                       # stage all tracked modified files
         _git("add", "VERSION", "CHANGELOG.md")  # always include these two
