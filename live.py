@@ -204,8 +204,25 @@ def _check_trail_s2(positions, mids=None):
         try:
             update_sl(coin, d, t["size"], new_sl)   # no entry -> also cancels TP
         except Exception as e:
-            logger.error(f"[S2] {coin} stop ratchet failed: {e}")
+            # update_sl cancels the resting TP and stop BEFORE placing the new
+            # stop, so a failure here leaves the position naked. t["sl"] is
+            # deliberately left untouched: `improves` stays true, so the next
+            # poll (~20s) retries and re-protects it. Alert once per position
+            # rather than every poll, because a persistent failure is the one
+            # case where the bot is running an unhedged position silently.
+            logger.error(f"[S2] {coin} stop ratchet failed — position "
+                         f"UNPROTECTED until retry: {e}")
+            if not t.get("naked_alerted"):
+                t["naked_alerted"] = True
+                tg.dm_owner(
+                    f"🚨 <b>[S2] {coin}</b>\n"
+                    f"جابجایی استاپ ناموفق بود\n"
+                    f"پوزیشن تا تلاش بعدی بدون استاپ است\n"
+                    f"<code>{str(e)[:120]}</code>"
+                )
             continue
+
+        t.pop("naked_alerted", None)
 
         t["sl"] = new_sl
         t["locked_r"] = locked

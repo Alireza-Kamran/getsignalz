@@ -15,8 +15,20 @@ TAKER_FEE = 0.00035
 
 def backtest_coin(coin, tf="1h", bars=5000, start=None, end=None,
                   trail_start_r=None, trail_step_r=0.5,
-                  partial_at_r=None, partial_pct=0.5):
+                  partial_at_r=None, partial_pct=0.5,
+                  breakeven_at_r=None, ratchet_on="close", path="real"):
     """Walk history through strategy2.signal(), simulating fills.
+
+    path: which price series the simulated trade walks. "real" uses the actual
+    exchange OHLC; "ha" uses the Heikin Ashi series indicators.fetch_candles
+    overwrites the OHLC columns with. HA is what every number in this file was
+    measured on before 2026-07-30, and it is wrong for path simulation: HA high
+    is by construction max(real_high, ha_open, ha_close) and HA low the matching
+    min, so HA bars are ~14% wider than the real ones, and ha_close differs from
+    the real close by ~0.21% on average. The strategy READS HA (that is the
+    indicator basis and stays untouched) but it FILLS on the exchange, and
+    strategy2.signal already prices entry from real_close. Walking the stop and
+    the ratchet over HA mixed a real entry with a synthetic path.
 
     trail_start_r: when set, the fixed take-profit is replaced by a progressive
     stop. Reaching trail_start_r moves the stop to breakeven; every further
@@ -37,6 +49,10 @@ def backtest_coin(coin, tf="1h", bars=5000, start=None, end=None,
     df = s2.build_df(coin, tf, bars=bars)
     if df is None or len(df) < 100:
         return []
+    if path == "real" and "real_close" in df.columns:
+        df = df.copy()
+        for c in ("open", "high", "low", "close"):
+            df[c] = df["real_" + c]
     if start is not None:
         df = df[df.index >= start]
     if end is not None:
@@ -66,7 +82,10 @@ def backtest_coin(coin, tf="1h", bars=5000, start=None, end=None,
             hit_sl = (row["low"] <= open_t["sl"]) if d == 1 else (row["high"] >= open_t["sl"])
             if hit_sl:                      # SL first on ambiguity, as in backtest.py
                 res = "sl" if open_t["sl"] == open_t["sl_orig"] else "trail"
-                if open_t.get("scaled"):
+                if open_t.get("moved_be") and not open_t.get("scaled"):
+                    total_r = 0.0                 # stopped out at entry
+                    res = "breakeven"
+                elif open_t.get("scaled"):
                     # Blended outcome: partial_pct banked at the scale-out level,
                     # the rest exiting at wherever the ratchet had reached.
                     total_r = (partial_pct * partial_at_r
@@ -81,8 +100,29 @@ def backtest_coin(coin, tf="1h", bars=5000, start=None, end=None,
 
             if partial_at_r:
                 R = open_t["R"]
-                extreme = row["high"] if d == 1 else row["low"]
+                # The ratchet must be driven by a price the LIVE bot could
+                # actually have acted on. live.py polls the mid every ~20s, so a
+                # one-minute wick inside an hourly bar is invisible to it -- but
+                # the bar's high records it, and using that let a spurious spike
+                # lock the stop at +5R and then "fill" there. Measured on 80
+                # coins: thin alts showed avgR +1.81 vs +0.77 for the majors,
+                # 90 trades above 3R, one at 13R, and 89% of all profit came
+                # from wicks on the illiquid names. Close is the conservative
+                # proxy for "a level price actually held long enough to trade".
+                extreme = row["close"] if ratchet_on == "close" else (
+                    row["high"] if d == 1 else row["low"])
                 mfe_r = (extreme - open_t["entry"]) * d / R
+                # Optional early move to breakeven, BELOW the ratchet's own
+                # trigger. Cuts a loss to zero when a trade runs part-way and
+                # reverses -- but only ever helps if the trade would otherwise
+                # have gone on to lose, and turns a winner into a scratch every
+                # time price dips back through entry before running.
+                if (breakeven_at_r and not open_t["scaled"]
+                        and mfe_r >= breakeven_at_r):
+                    be_sl = open_t["entry"]
+                    if (be_sl > open_t["sl"]) if d == 1 else (be_sl < open_t["sl"]):
+                        open_t["sl"] = be_sl
+                        open_t["moved_be"] = True
                 if mfe_r >= partial_at_r:
                     if not open_t["scaled"]:
                         open_t["scaled"] = True          # bank partial_pct at the level
@@ -123,7 +163,7 @@ def backtest_coin(coin, tf="1h", bars=5000, start=None, end=None,
             open_t = {**sig, "coin": coin, "tf": tf, "open_time": row.name,
                       "mae_abs": 0.0, "sl_orig": sig["sl"],
                       "R": abs(sig["entry"] - sig["sl"]), "max_rung": 0,
-                      "scaled": False, "locked_r": 0.0}
+                      "scaled": False, "locked_r": 0.0, "moved_be": False}
     return trades
 
 

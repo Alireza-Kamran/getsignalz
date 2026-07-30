@@ -355,5 +355,25 @@ def update_sl(coin, direction, sz, new_sl, entry=None):
         order_type={"trigger": {"triggerPx": sl_trigger, "isMarket": True, "tpsl": "sl"}},
         reduce_only=True,
     )
+    # The cancel loop above has ALREADY removed the protective orders by this
+    # point -- when called without `entry` (the strategy-2 ratchet path) that
+    # includes the take-profit AND the old stop. So a placement that fails here
+    # leaves the position with nothing resting against it. Every other order
+    # site in this file checks both the outer status and the inner one (the
+    # outer "ok" can mask an inner error, see place_bracket); this one only
+    # logged it, so a rejected ratchet stop would have been recorded as a
+    # success and never retried. Raise instead, and let the caller decide.
+    ok = result.get("status") == "ok"
+    inner = None
+    if ok:
+        try:
+            inner = result["response"]["data"]["statuses"][0]
+        except (KeyError, IndexError, TypeError):
+            inner = None
+        if isinstance(inner, dict) and "error" in inner:
+            ok = False
+    if not ok:
+        raise RuntimeError(f"SL placement rejected for {coin}: {inner or result}")
+
     logger.info(f"New SL for {coin} @ ${new_sl:.4f}: {result.get('status')}")
     return result
