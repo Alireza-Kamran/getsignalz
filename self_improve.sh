@@ -153,7 +153,7 @@ You are a professional trader who happened to also be a software engineer. You t
 '
 
 OUT_TMP="$(mktemp)"
-timeout 3600 "$CLAUDE_BIN" -p "$PROMPT" > "$OUT_TMP" 2>&1
+timeout 3600 "$CLAUDE_BIN" -p --permission-mode acceptEdits "$PROMPT" > "$OUT_TMP" 2>&1
 RC=$?
 cat "$OUT_TMP" >> "$LOG"
 echo "Session ended: $(date -u '+%H:%M UTC') (exit $RC)" >> "$LOG"
