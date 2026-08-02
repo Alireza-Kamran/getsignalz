@@ -62,22 +62,35 @@ def check(name, cond, detail=""):
 
 
 def main():
-    assert strategy2.TRAIL_START_R == 1.0 and strategy2.TRAIL_STEP_R == 0.25, \
-        "test encodes the 1.0/0.25 ratchet; update it if those change"
+    # Derived from the live constants rather than hard-coded, so a future change
+    # to the ratchet retunes the test instead of breaking it. Only the arming
+    # threshold is parametrised; the rung-arithmetic cases below are pinned to
+    # explicit numbers on purpose, since that is the arithmetic being checked.
+    start, step = strategy2.TRAIL_START_R, strategy2.TRAIL_STEP_R
+    assert step == 0.25, "rung cases below encode a 0.25R step"
     ok = True
 
-    # 1. Below 1R the ratchet must not arm -- the original stop stays, and the
-    #    resting take-profit must not be cancelled.
-    f, t = _run(100.9, _trade())
-    ok &= check("no arm below 1R", not f.calls and t["sl"] == 99.0)
+    # 1. Below the arming threshold the ratchet must not arm -- the original
+    #    stop stays, and the resting take-profit must not be cancelled.
+    f, t = _run(100.0 + (start - 0.1), _trade())
+    ok &= check("no arm below %sR" % start, not f.calls and t["sl"] == 99.0)
 
-    # 2. At exactly 1R it arms, locks at 1R, and calls update_sl WITHOUT entry
-    #    so the TP is cancelled -- leaving it would close the trade at 1R and
-    #    the ratchet would never do anything.
-    f, t = _run(101.0, _trade())
-    ok &= check("arms at 1R", len(f.calls) == 1 and t["locked_r"] == 1.0
-                and abs(t["sl"] - 101.0) < 1e-9)
+    # 2. At exactly the threshold it arms, locks there, and calls update_sl
+    #    WITHOUT entry so the TP is cancelled -- leaving it in place would close
+    #    the trade at TP_R and the ratchet would never do anything.
+    f, t = _run(100.0 + start, _trade())
+    ok &= check("arms at %sR" % start, len(f.calls) == 1 and t["locked_r"] == start
+                and abs(t["sl"] - (100.0 + start)) < 1e-9)
     ok &= check("cancels TP (entry=None)", f.calls and f.calls[0]["entry"] is None)
+
+    # 2b. The point of arming below TP_R (2026-08-02): a trade that runs most of
+    #     the way to target and then reverses must exit in PROFIT rather than at
+    #     a full stop. Peak 0.9R, then back through the entry.
+    runner = _trade()
+    _run(100.9, runner)
+    ok &= check("sub-TP peak leaves a profitable stop",
+                runner["sl"] > 100.0 and runner["locked_r"] >= start,
+                "sl=%.4f locked=%s" % (runner["sl"], runner["locked_r"]))
 
     # 3. Rung arithmetic: 1.6R -> int(0.6/0.25)=2 rungs -> locked 1.5R.
     f, t = _run(101.6, _trade())

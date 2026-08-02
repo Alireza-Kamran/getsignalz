@@ -44,12 +44,20 @@ RSI_OVERBOUGHT = 75      # short when RSI pops above this
 # Mean reversion is precisely the thing that fails in a strong trend, so a high
 # ADX reading disqualifies the setup rather than merely down-weighting it.
 ADX_LEN        = 14
-MAX_ADX        = 25      # 25 over 30: fewer signals (18.9/mo vs 47.2) but every
-                         # month in the sample closed positive (8/8 vs 6/8) and
-                         # max drawdown fell from -16.4% to -4.2%. Chosen for
-                         # Kamran's stated priority -- smallest loss first,
-                         # frequency second -- and 18.9/mo still clears the
-                         # "at least one trade every two days" requirement.
+MAX_ADX        = 25      # WARNING: the figures that used to justify this value
+                         # (18.9/mo vs 47.2, 8/8 positive months, maxDD -16.4%
+                         # -> -4.2%) were Heikin-Ashi-path and are VOID.
+                         # Re-derived on real prices 2026-07-31: the gate buys
+                         # NO expected value. Removing it entirely measures
+                         # better on every axis (n=697 EV +0.478% t=6.31 maxDD
+                         # -10.59%, vs n=116 EV +0.315% t=2.13 maxDD -12.49%
+                         # here), and it discards 88.5% of RSI-extreme bars.
+                         # Kept at 25 anyway, deliberately: the no-gate edge
+                         # decays hard across the sample (Jan +72% -> Jul
+                         # +6.8%), and going to 3.4 trades/day on an engine
+                         # with a handful of live trades is a risk-profile
+                         # decision for Kamran, not a nightly auto-tune.
+                         # Staged move if he wants frequency is 25 -> 30.
 
 # Price must be genuinely stretched, not just drifting: at least this many ATRs
 # away from the EMA. Without it, RSI extremes in a quiet range produce constant
@@ -60,13 +68,17 @@ MIN_STRETCH_ATR = 1.5
 # ── Exit ──────────────────────────────────────────────────────────────────────
 ATR_LEN        = 14
 SL_ATR_MULT    = 1.5     # stop beyond the extreme
-TP_R           = 1.0     # 1.5R was the initial guess, on the reasoning that fees
-                         # (~0.09R/trade) would eat too much of a 1:1 target.
-                         # Measured, that was wrong in every direction: 1.0R beat
-                         # 1.5R on win rate (63.6% vs 48.7%), net return (+64%
-                         # vs +43%) AND drawdown (-16.4% vs -24.6%). The win-rate
-                         # gain from a closer, more reachable target more than
-                         # covers the fee drag.
+TP_R           = 1.0     # VOID NUMBERS WARNING: the comparison that chose this
+                         # (1.0R beating 1.5R on WR 63.6% vs 48.7%, net +64% vs
+                         # +43%, drawdown -16.4% vs -24.6%) was measured on the
+                         # Heikin-Ashi path and has NOT been re-derived on real
+                         # prices. Treat the value as unvalidated, not as
+                         # settled. Note this constant now only sets where the
+                         # resting take-profit is placed: since 2026-08-02 the
+                         # ratchet arms below it (TRAIL_START_R 0.75), so the TP
+                         # is cancelled before it can be reached on any trade
+                         # that gets that far. Re-deriving it is a live open
+                         # question -- see the memory file.
 
 MAX_LEV_LOSS   = 20.0    # same risk envelope as strategy 1
 MAX_LEVERAGE   = 25.0
@@ -148,12 +160,40 @@ MAX_TRADES = 2
 # Because the stop can only ever sit at or above TRAIL_START_R once armed, the
 # trade's floor is unchanged -- this only adds upside, never removes profit.
 #
-# Measured over ~8 months, 20 coins, fees included, vs the plain fixed 1R exit:
-#   fixed TP 1R          net  +628.5%   WR 65.9%   maxDD -4.23%   8/8 months +
-#   ratchet, nothing out net +1358.6%   WR 67.7%   maxDD -4.23%   8/8 months +
-# Win rate, drawdown and monthly consistency are identical because losing trades
-# never reach the trigger and so are untouched; only winners change.
-TRAIL_START_R = 1.0
+# The numbers that used to justify 1.0 here (+628.5% / +1358.6% / maxDD -4.23%
+# / 8-of-8 positive months) were measured on the Heikin Ashi price path and are
+# VOID -- see the 2026-07-30 bug. Do not quote them. Re-derived 2026-08-02 in
+# portfolio2.py (capped book, real prices, fees in), 20 coins, 5000 bars:
+#
+#   TRAIL_START_R   n    WR      net      maxDD    EV/trade   t
+#   0.50           120  60.8%  +21.54%   -9.23%   +0.179%   1.65
+#   0.65           120  57.5%  +34.49%   -6.10%   +0.287%   2.30
+#   0.75 (chosen)  118  55.9%  +33.73%   -9.02%   +0.286%   2.28
+#   0.85           117  53.0%  +34.86%   -8.93%   +0.298%   2.24
+#   1.00 (was)     117  49.6%  +32.41%  -12.49%   +0.277%   2.04
+#   1.25           116  44.0%  +30.75%  -16.45%   +0.265%   1.81
+#
+# Arming below the 1R take-profit rescues the trades that run most of the way to
+# target and then reverse into a full stop: 18 of 118 (15.3%) peak between 0.5R
+# and 1.0R, and under a 1.0 trigger every one of them is a maximum loss. Buying
+# those back costs a little off the winners (a trade peaking at 1.0R now locks
+# 0.75R, not 1.00R), which is why net return barely moves. The gain is in the
+# risk profile, not the return: win rate +6.3pp and max drawdown ~28% smaller.
+#
+# 0.75 over the slightly better-scoring 0.70 because the whole 0.65-0.85 band is
+# flat (net +33.7 to +36.7, t 2.24-2.43) and picking the peak inside a flat band
+# is fitting noise; 0.75 is a round number with strong neighbours on both sides.
+# Survives the standing rejection tests: better than 1.0 at concurrency cap 1, 2
+# and 4, and under alphabetical instead of |stretch| selection. Caveat kept in
+# plain sight -- it is 4-of-7 positive months against 1.0's 5-of-7 (February
+# moves +0.9% -> -0.1%, i.e. zero either way) and still tail-dependent.
+#
+# TRAIL_STEP_R deliberately NOT changed. Smaller is monotonically better (0.1
+# -> +34.4%, 0.25 -> +32.4%, 0.5 -> +28.3%, 1.0 -> +25.4%) with no plateau, so
+# the optimum sits at the boundary -- that is a smooth mechanical relationship,
+# not a measured edge, and chasing it means more stop-modification calls on the
+# exact path whose failure mode had to be fixed on 2026-07-30.
+TRAIL_START_R = 0.75
 TRAIL_STEP_R  = 0.25
 
 

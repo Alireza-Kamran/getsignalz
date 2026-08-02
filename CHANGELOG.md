@@ -2,6 +2,67 @@
 
 All nightly improvements are logged here automatically.
 
+> **Gap notice:** v1.22.0 (2026-07-30) and v1.23.0 (2026-07-31) exist as commits but were
+> never given entries here — the nightly sessions bumped the version in the commit subject
+> only. Their full write-ups are in the memory file's session log for those dates.
+
+## v1.24.0 — 2026-08-02 — THE RATCHET RAN LIVE, AND ITS TRIGGER WAS SET TOO HIGH
+
+**Stats:** live n went 1 → 4 (2W/2L). In R: +0.075R total, i.e. flat. Max drawdown 2.77%
+of account. One parameter changed.
+
+**The ratchet executed live for the first time — twice — and behaved exactly as specified.**
+AVAX locked +1R at $6.2034 (exit +15.67%, rr 0.993) and ETH locked +1R at $1852.08 (exit
++17.38%, rr 0.985). Take-profit cancelled on both, no `position UNPROTECTED` line. The
+naked-stop guard added on 07-30 was never needed but is now a live-exercised path. This is
+the code carrying 100% of the strategy's measured edge, and it had never run before.
+
+**Read live P&L in R, not leveraged %.** The dashboard's -6.14% is a reporting artifact:
+`strategy2.signal` sizes leverage as `MAX_LEV_LOSS / sl_pct` so 1R always equals 20%, but
+the exchange clamps it. ETH computed 15.9x and got 20x, so a 1R stop printed -26.1% instead
+of -20%. Account risk was correct at ~1% throughout (size = `risk_usd` / stop distance), so
+this is not a capital-risk bug — but it makes the published number move with whatever
+leverage the exchange grants.
+
+**`TRAIL_START_R` 1.0 → 0.75.** The comment justifying 1.0 quoted the Heikin-Ashi numbers
+voided on 07-30 (+628.5%, maxDD -4.23%, 8-of-8 months). Same class of finding as 07-31: the
+results were restated, the reasons underneath them were not. Re-derived in `portfolio2.py`
+(capped book, real prices, fees, 20 coins, 5000 bars):
+
+| TRAIL_START_R | n | WR | net | maxDD | EV | t |
+|---|---|---|---|---|---|---|
+| 0.65 | 120 | 57.5% | +34.49% | -6.10% | +0.287% | 2.30 |
+| **0.75 (new)** | 118 | **55.9%** | +33.73% | **-9.02%** | +0.286% | **2.28** |
+| **1.00 (old)** | 117 | 49.6% | +32.41% | -12.49% | +0.277% | 2.04 |
+| 1.25 | 116 | 44.0% | +30.75% | -16.45% | +0.265% | 1.81 |
+
+Net return barely moves; the gain is risk profile — **win rate +6.3pp, max drawdown ~28%
+smaller**, return/maxDD 2.6 → 3.7. Mechanism: 18 of 118 trades (15.3%) peak between 0.5R and
+1.0R and under a 1.0R trigger every one is a maximum loss. Arming below the take-profit
+converts them, paid for by capping near-1.0R peaks at 0.75R.
+
+Passed the standing rejection tests before deployment: better than 1.0 at concurrency cap 1,
+2 and 4; better under alphabetical instead of `|stretch|` selection; out-of-sample t=2.36 vs
+1.92; and the 0.65–0.85 band is flat, so it is a plateau not a spike. 0.70 scored best
+(+36.72, t=2.43) and was deliberately **not** taken — picking the peak inside a flat band is
+fitting noise. Caveats kept in plain sight: 4-of-7 positive months vs 5-of-7, and in-sample
+ex-top5 is negative at every setting (the 07-30 tail-dependence is untouched).
+
+**`TRAIL_STEP_R` deliberately unchanged.** Smaller is monotonically better (0.1 → +34.4%,
+1.0 → +25.4%) with no plateau, so the optimum is at the boundary — a mechanical relationship,
+not an edge, and chasing it adds stop-modification calls on the path whose failure mode was
+only fixed on 07-30.
+
+**Void-number cleanup.** `MAX_ADX` and `TP_R` comments still quoted HA-path figures as settled
+fact; both now carry explicit warnings. **`TP_R = 1.0` has never been re-derived on real
+prices** and is the largest remaining unvalidated constant.
+
+**`test_ratchet.py`** now derives its arming cases from the constants instead of hard-coding
+1.0 (its deliberate `assert ... update it if those change` guard did its job), plus a new
+assertion that a sub-target peak leaves a profitable stop. 10/10 pass.
+
+**New:** `sweep_ratchet.py` and `rej_check.py` — the derivation record, re-runnable.
+
 ## v1.21.0 — 2026-07-29 — THE BOT WAS FROZEN FOR 4 HOURS AND SYSTEMD SAID IT WAS FINE
 
 **Stats:** 1 live trade (unchanged). Max drawdown 1.58%. No strategy parameter changed.
