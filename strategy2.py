@@ -68,17 +68,61 @@ MIN_STRETCH_ATR = 1.5
 # ── Exit ──────────────────────────────────────────────────────────────────────
 ATR_LEN        = 14
 SL_ATR_MULT    = 1.5     # stop beyond the extreme
-TP_R           = 1.0     # VOID NUMBERS WARNING: the comparison that chose this
-                         # (1.0R beating 1.5R on WR 63.6% vs 48.7%, net +64% vs
-                         # +43%, drawdown -16.4% vs -24.6%) was measured on the
-                         # Heikin-Ashi path and has NOT been re-derived on real
-                         # prices. Treat the value as unvalidated, not as
-                         # settled. Note this constant now only sets where the
-                         # resting take-profit is placed: since 2026-08-02 the
-                         # ratchet arms below it (TRAIL_START_R 0.75), so the TP
-                         # is cancelled before it can be reached on any trade
-                         # that gets that far. Re-deriving it is a live open
-                         # question -- see the memory file.
+TP_R           = 3.0     # Re-derived on real prices 2026-08-03 (sweep_tp.py),
+                         # replacing the VOID Heikin-Ashi comparison that chose
+                         # 1.0 (1.0R "beating" 1.5R on WR 63.6% vs 48.7%, net
+                         # +64% vs +43%). Do not quote those figures.
+                         #
+                         # This constant no longer picks an exit. Since
+                         # 2026-08-02 the ratchet arms at TRAIL_START_R=0.75,
+                         # BELOW the take-profit, and cancels it -- so the only
+                         # thing TP_R still does is decide where a resting
+                         # backstop order sits for the case where the bot dies
+                         # mid-trade. At 1.0 that backstop sat 0.25R above the
+                         # arming threshold, which made it a truncation device:
+                         # a move that travels 0.75R -> 1.0R inside a single
+                         # ~20s poll window fills the TP before the ratchet can
+                         # cancel it, capping the trade at exactly 1R. That
+                         # lands on precisely the fast, strongly trending
+                         # trades the ratchet exists to harvest.
+                         #
+                         # Worst case (every touch of the TP level fills before
+                         # the ratchet arms), 20 coins, 5000 bars, capped book,
+                         # fees in:
+                         #
+                         #   TP_R   n    WR      net      maxDD    EV       t
+                         #   1.0   121  57.9%  +15.59%   -9.26%  +0.129%  1.32
+                         #   1.5   120  56.7%  +25.66%  -10.76%  +0.214%  1.94
+                         #   2.0   120  56.7%  +32.20%  -10.26%  +0.268%  2.31
+                         #   3.0   120  56.7%  +39.03%   -9.26%  +0.325%  2.61
+                         #   5.0   120  56.7%  +45.68%   -9.02%  +0.381%  2.79
+                         #   none  118  56.8%  +48.83%   -9.02%  +0.414%  2.82
+                         #
+                         # 46 of 121 trades (38%) touched the 1.0R level while
+                         # unarmed, giving up 36.75R in aggregate in the worst
+                         # case. Raising the backstop cannot turn a winner into
+                         # a loser: any trade that reaches 1.0R has already
+                         # armed the ratchet at 0.75R, so its resting stop is
+                         # locked at >= +0.75R. Win rate barely moves (57.9 ->
+                         # 56.7) and max drawdown does not worsen.
+                         #
+                         # The relationship is monotonic toward "no TP", so the
+                         # optimum sits at the boundary. 3.0 is deliberately an
+                         # interior value, on the same reasoning that kept
+                         # TRAIL_STEP_R at 0.25: a backstop retains some value
+                         # against a dead bot, and picking the boundary of a
+                         # monotone curve is not a measured edge. Neighbours are
+                         # smooth (2.0 -> +32.2%, 3.5 -> +42.6%, 4.0 -> +45.7%).
+                         #
+                         # Survives the standing rejection tests against 1.0:
+                         # concurrency cap 1 (+27.5 vs +12.3), cap 2 (+39.0 vs
+                         # +15.6), cap 4 (+45.1 vs +25.4); alphabetical instead
+                         # of |stretch| ranking (+34.0 vs +12.8); and the
+                         # out-of-sample split, where 3.0 is positive in BOTH
+                         # halves (in-sample +9.94% t=0.94, OOS +29.10% t=2.76)
+                         # while 1.0's in-sample half is NEGATIVE (-2.87%).
+                         # Independent of last night's change: the same effect
+                         # holds at the old TRAIL_START_R=1.0 (+2.41% -> +37.46%).
 
 MAX_LEV_LOSS   = 20.0    # same risk envelope as strategy 1
 MAX_LEVERAGE   = 25.0

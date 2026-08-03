@@ -6,6 +6,38 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.25.0 — 2026-08-03 — THE TAKE-PROFIT HAD BECOME A TRUNCATION DEVICE
+
+**Stats:** live n unchanged at 4 (no signal since 08-01 20:01, ~30h quiet). Book flat.
+One parameter changed, one publishing bug fixed, one new tool.
+
+**`TP_R` 1.0 → 3.0** — the last constant still resting on the void Heikin-Ashi numbers.
+Re-deriving it showed it had stopped being an exit parameter at all: since 08-02 the ratchet
+arms at 0.75R, *below* the take-profit, and cancels it, so `TP_R` only decides where a
+dead-bot backstop sits. At 1.0 that backstop sat 0.25R above the arming threshold, so a move
+travelling 0.75R → 1.0R inside one ~20s poll window filled the TP before the ratchet could
+cancel it — capping the trade at exactly 1R, on precisely the fast trending trades the ratchet
+exists to harvest. **46 of 121 trades (38%) touched 1.0R while unarmed, giving up 36.75R.**
+
+Worst case (20 coins, 5000 bars, capped book, fees in): TP_R 1.0 → net +15.59%, EV +0.129%,
+t=1.32. TP_R 3.0 → net +39.03%, EV +0.325%, t=2.61, at the same win rate and no worse
+drawdown. Raising the backstop cannot turn a winner into a loser — anything reaching 1.0R
+already armed at 0.75R, so its stop is locked at ≥ +0.75R. Passed all standing rejection tests
+(concurrency cap 1/2/4, alphabetical ranking, out-of-sample positive in both halves, and
+independence from the 08-02 change). 3.0 rather than 5.0/none deliberately: the curve is
+monotonic toward no-TP, and picking the boundary of a monotone relationship is a mechanical
+fact, not a measured edge.
+
+**New: `sweep_tp.py`** — `portfolio2.simulate` does not model the take-profit at all, so
+`TP_R` was invisible to it and could not be swept there. The new tool asserts equivalence with
+`portfolio2` at `tp_r=None` before reporting anything, and gives bounds rather than an estimate.
+
+**Fixed: signals advertised a target the bot is designed to miss.** `tg.send_signal` rendered
+the TP as the goal with an `R:R 1 : X` line; with a 3R backstop that would have published a
+number every S2 trade intends never to reach. S2 signals now state the real mechanism —
+trailing stop arms at +0.75R, floor once armed, backstop TP marked cancelled-on-arming.
+S1 rendering byte-unchanged.
+
 ## v1.24.0 — 2026-08-02 — THE RATCHET RAN LIVE, AND ITS TRIGGER WAS SET TOO HIGH
 
 **Stats:** live n went 1 → 4 (2W/2L). In R: +0.075R total, i.e. flat. Max drawdown 2.77%

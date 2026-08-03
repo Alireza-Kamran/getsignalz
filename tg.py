@@ -80,7 +80,8 @@ def dm_owner_file(path, caption=""):
 # ── Signal post — single message, three states ────────────────────────────────
 
 def send_signal(coin, direction, score, price, sl, tp, reasons,
-                account_val, risk_usd, tf="1h", leverage=10, strategy="S1"):
+                account_val, risk_usd, tf="1h", leverage=10, strategy="S1",
+                trail_start_r=None):
     """Post the signal as 'waiting for entry'. Returns (sig_num, msg_id)."""
     side     = "LONG 🟢" if direction == 1 else "SHORT 🔴"
 
@@ -97,6 +98,24 @@ def send_signal(coin, direction, score, price, sl, tp, reasons,
     strat_name = "Mean-Reversion" if strategy == "S2" else "Liquidity-Pool"
     score_txt  = f"Score: {score}/8  ·  " if strategy == "S1" else ""
 
+    # Strategy 2 does not exit at its take-profit and has not since 2026-08-02:
+    # the stop ratchet arms BELOW the TP and cancels it, so the resting TP is a
+    # backstop against the bot dying mid-trade, not a target. Advertising it as
+    # "TP -> +X%, R:R 1:3" would print a goal every trade is designed to miss.
+    # The number that actually describes the trade is the ratchet floor.
+    if strategy == "S2" and trail_start_r:
+        lock_pct = round(trail_start_r * lev_loss, 1)
+        exit_block = (
+            f"🎯 Exit:   trailing stop, arms at <b>+{trail_start_r:g}R</b>\n"
+            f"🔒 Floor:  <b>+{lock_pct:.1f}%</b> once armed, then trails up\n"
+            f"🛡️ Backstop TP: <code>${tp:.5g}</code>  <i>(cancelled on arming)</i>\n\n"
+        )
+    else:
+        exit_block = (
+            f"🎯 TP:     <code>${tp:.5g}</code>  →  <b>+{lev_gain:.1f}%</b>\n"
+            f"⚖️ R:R:    1 : {rr}\n\n"
+        )
+
     msg = (
         f"<b>{coin} {side}  #Signal{num}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -106,8 +125,7 @@ def send_signal(coin, direction, score, price, sl, tp, reasons,
         f"📊 {score_txt}{tf}  ·  <b>{leverage}x</b>\n"
         f"💰 Entry:  <code>${price:.5g}</code>\n"
         f"🛑 SL:     <code>${sl:.5g}</code>  →  <b>-{lev_loss:.1f}%</b>\n"
-        f"🎯 TP:     <code>${tp:.5g}</code>  →  <b>+{lev_gain:.1f}%</b>\n"
-        f"⚖️ R:R:    1 : {rr}\n\n"
+        f"{exit_block}"
         f"📋 <b>Confluence:</b>\n{reasons_txt}"
     )
     msg_id = send(msg)

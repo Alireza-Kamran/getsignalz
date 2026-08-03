@@ -696,6 +696,7 @@ def run():
                             account_val=account_val, risk_usd=risk2,
                             tf=strategy2.TF, leverage=s2_best["leverage"],
                             strategy="S2",
+                            trail_start_r=strategy2.TRAIL_START_R,
                         )
                         if res2:
                             hl2   = get_positions().get(c2, {})
