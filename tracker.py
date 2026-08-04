@@ -189,15 +189,21 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
 
     if closed:
         is_profit = (final_pct or 0) >= 0
-        if close_result == "tp" and is_profit:
+        # Same correction as result_card: the ratchet cancels the TP, so a
+        # profitable trade still closes with close_result="sl" and used to be
+        # labelled a neutral "CLOSED" rather than the win it was.
+        if close_result == "tp":
             status_line = "✅ TP HIT"
             pnl_emoji   = "💹"
-        elif close_result == "sl" and not is_profit:
-            status_line = "❌ SL HIT"
-            pnl_emoji   = "💀"
+        elif is_profit and (final_pct or 0) > 0:
+            status_line = "✅ TRAIL EXIT"
+            pnl_emoji   = "💹"
+        elif (final_pct or 0) == 0:
+            status_line = "⚪️ BREAKEVEN"
+            pnl_emoji   = "💹"
         else:
-            status_line = "🔘 CLOSED"
-            pnl_emoji   = "💹" if is_profit else "💀"
+            status_line = "❌ STOP HIT"
+            pnl_emoji   = "💀"
         pct_s = f"+{final_pct:.1f}%" if final_pct >= 0 else f"{final_pct:.1f}%"
         # Dollar PnL from the position itself (entry→exit)
         raw_dollar = (current_price - entry) * direction * abs(t.get("size", 0))

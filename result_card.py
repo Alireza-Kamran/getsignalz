@@ -37,7 +37,12 @@ def generate(coin: str, direction: int, entry: float, exit_px: float,
              duration_h: float, max_adverse: float = 0.0,
              leverage: int = 10, size: float = 0) -> io.BytesIO:
 
-    won   = result == "tp" and lev_pct > 0
+    # Classify on realised P&L, never on which ORDER closed the trade. The
+    # ratchet cancels the take-profit at +1R, so under strategy 2 every exit --
+    # winners included -- fires the stop and arrives here as result="sl". Reading
+    # the label painted every profitable card red and captioned it "SL HIT":
+    # AVAX +15.7%, ETH +17.4% and BTC +13.3% all shipped as losses.
+    won   = lev_pct > 0
     side  = "SHORT" if direction == -1 else "LONG"
     color = GREEN if won else RED
     bg_tint = DARKGN if won else DARKRD
@@ -51,8 +56,17 @@ def generate(coin: str, direction: int, entry: float, exit_px: float,
     dur_str   = f"{dur_h_int}h {dur_m_int}m" if dur_h_int else f"{dur_m_int}m"
 
     close_dt  = closed_at.astimezone(timezone.utc).strftime("%d %b %Y · %H:%M UTC")
-    status    = "TP HIT" if won else "SL HIT"
-    status_icon = "✓" if won else "✗"
+    # "TP HIT" is now the rare case (the 3R backstop). A winner normally exits on
+    # the ratcheted stop, which is a trailing exit, not a stop-out.
+    if result == "tp":
+        status = "TP HIT"
+    elif lev_pct > 0:
+        status = "TRAIL EXIT"
+    elif lev_pct == 0:
+        status = "BREAKEVEN"
+    else:
+        status = "STOP HIT"
+    status_icon = "✓" if won else ("=" if lev_pct == 0 else "✗")
 
     # ── Figure ─────────────────────────────────────────────────────────────────
     fig = plt.figure(figsize=(9, 5.4), facecolor=BG)
