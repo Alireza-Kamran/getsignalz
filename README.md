@@ -3,11 +3,11 @@
 [![English](https://img.shields.io/badge/🇬🇧-English-2ea44f?style=for-the-badge)](README.md)
 [![فارسی](https://img.shields.io/badge/🇮🇷-فارسی-555?style=for-the-badge)](README.fa.md)
 
-# GetSignalz
+# GetSignal AI
 
 **Autonomous trading agent for Hyperliquid perpetuals**
 
-[![Channel](https://img.shields.io/badge/Telegram-@GetSignalz-229ED9?style=flat-square&logo=telegram)](https://t.me/GetSignalz)
+[![Channel](https://img.shields.io/badge/Telegram-@GetSignalAI-229ED9?style=flat-square&logo=telegram)](https://t.me/GetSignalAI)
 ![Exchange](https://img.shields.io/badge/Exchange-Hyperliquid-000?style=flat-square)
 ![Mode](https://img.shields.io/badge/Mode-Testnet-orange?style=flat-square)
 
@@ -37,11 +37,11 @@ A position opens when all three hold on a closed 1h candle:
 | Price stretched from its mean | ≥ 1.5 ATR from EMA(100) |
 | Market not trending | ADX < 25 |
 
-**Exit — progressive risk-free ratchet.** Take-profit sits at 1R. On reaching
-it the TP is cancelled, the stop locks at 1R, and it ratchets up another 0.25R
-for every 0.25R the trade gains. The position then exits only when that stop is
-taken out. The floor never moves below 1R once armed, so this adds upside
-without giving back certain profit.
+**Exit — progressive risk-free ratchet.** At +1R the resting take-profit is
+cancelled, the stop locks at +1R, and from there it ratchets up 0.25R for every
+0.25R gained. The position exits only when that stop is taken out, so once armed
+the trade cannot return less than +1R. A take-profit still rests at 3R purely as
+a backstop in case the bot dies mid-trade — it is not the intended exit.
 
 ---
 
@@ -52,6 +52,7 @@ without giving back certain profit.
 | Risk per trade | 1% of account |
 | Max concurrent positions | 2 |
 | Max leveraged loss per trade | 20% |
+| Take-profit backstop | 3R |
 | Max leverage | 25x |
 | Stop-loss | 1.5 × ATR |
 | Timeframe | 1h |
@@ -61,24 +62,42 @@ every stop-out costs the same 1% regardless of how wide the stop is.
 
 ---
 
-## Measured performance
+## Live results
 
-Backtest over ~8 months, 20 coins, exchange fees included:
+Real trades on the exchange. Every one is posted to the channel when it opens,
+updated while it runs, and left there when it closes — including the losers.
 
 | Metric | Value |
 |---|---|
-| Trades | 133 |
-| Win rate | 67.7% |
-| Frequency | ~19 / month |
-| Max drawdown | −4.2% |
-| Months positive | 8 / 8 |
-| Out-of-sample win rate | 63.6% |
+| Closed trades | 5 |
+| Win rate | 60% (3W / 2L) |
+| Total | +7.14% leveraged · +$5.46 |
+| Avg R:R | +0.16R |
+| Since | 2026-07-27 |
 
-All 13 parameter variations tested positive, so the result is not fitted to a
-single lucky value.
+**Five trades proves nothing.** It is posted because it is real, not because it
+is significant. Judge this again at 30+.
 
-> **This is backtest data.** Slippage is not modelled and there is no live
-> track record yet. Treat it as a validated hypothesis, not a proven edge.
+## Backtest
+
+20 coins, ~7 months, exchange fees included, one position per coin, capped at 2
+concurrent — the same limits the live bot runs under.
+
+| Model | Net (account) | Win rate |
+|---|---|---|
+| Optimistic fill | +40.5% | ~58% |
+| Pessimistic fill | +14.5% | ~54% |
+
+The two rows bracket how a trailing stop can fill in reality: the ratchet raises
+the stop the moment price prints a level, and whether that stop then survives
+the same candle is not knowable from hourly bars. Live execution sits somewhere
+between them.
+
+> Earlier versions of this file quoted 67.7% win rate and −4.2% drawdown. Those
+> came from a backtest that drove the ratchet off bar highs, which credits wicks
+> the bot could never have filled, and from Heikin-Ashi rather than real prices.
+> Both were wrong and the figures are void. The numbers above are what survived
+> the correction.
 
 ---
 
@@ -89,7 +108,10 @@ live.py         main loop, entries, stop ratchet, nightly triggers
 strategy2.py    signal logic and parameters
 executor.py     Hyperliquid order placement
 tracker.py      live message updates, dashboard, closed-trade stats
-backtest2.py    backtest engine for the live strategy
+backtest2.py    single-coin backtest engine
+portfolio2.py   portfolio simulation with the live concurrency cap
+sweep_*.py      parameter sweeps (TP, ratchet, fill model)
+test_ratchet.py unit tests for the exit ladder
 s2_report.py    per-trade CSV + monthly report export
 indicators.py   RSI, ATR, ADX, EMA, order blocks, liquidity pools
 tg.py           Telegram formatting

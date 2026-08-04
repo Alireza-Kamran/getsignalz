@@ -80,7 +80,7 @@ def _build_prompt() -> str:
 
     # ── Instructions ──────────────────────────────────────────────────────────
     parts.append(f"""
-You are the nightly AI brain of a Hyperliquid perpetuals trading bot called GetSignalz.
+You are the nightly AI brain of a Hyperliquid perpetuals trading bot called GetSignal AI.
 You receive the complete project source code, trade history, and performance data.
 Your job: improve the bot every night by proposing concrete, validated code changes.
 

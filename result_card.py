@@ -138,7 +138,7 @@ def generate(coin: str, direction: int, entry: float, exit_px: float,
 
     # ── Footer ─────────────────────────────────────────────────────────────────
     ax.axhline(y=0.75, xmin=0.028, xmax=0.972, color=BORDER, linewidth=0.6, alpha=0.4)
-    ax.text(4.5, 0.5, "@GetSignalz  ·  Testnet",
+    ax.text(4.5, 0.5, "@GetSignalAI  ·  Testnet",
             fontsize=8, color=MUTED, va="center", ha="center", alpha=0.7)
 
     # ── Render ─────────────────────────────────────────────────────────────────

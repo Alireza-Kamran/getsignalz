@@ -1,5 +1,5 @@
 #!/bin/bash
-# GetSignalz AI — nightly self-improvement session
+# GetSignal AI — nightly self-improvement session
 # Runs at 2:00 AM UTC daily via cron.
 
 # Cron uses a minimal default PATH that doesn't reliably include the claude
@@ -25,7 +25,7 @@ tg.dm_owner('⚠️ Nightly self-learn (02:00 UTC) FAILED: claude CLI not found 
     exit 1
 fi
 
-PROMPT='You are the brain of GetSignalz AI — a self-improving crypto trading bot.
+PROMPT='You are the brain of GetSignal AI — a self-improving crypto trading bot.
 
 Tonight is your nightly improvement session. You think like a professional trader who has been trading for 10 years. You study your own performance ruthlessly, identify weaknesses, and fix them. You do not wait for instructions. You evolve.
 

@@ -471,7 +471,7 @@ def run():
     logger.info("Watchdog armed — self-restart if the main loop stalls")
 
     logger.info("="*55)
-    logger.info("  GETSIGNALZ AI — ONLINE")
+    logger.info("  GETSIGNAL AI — ONLINE")
     # Banner reports the LIVE engine first. It used to print only strategy 1
     # numbers, which stopped being true when S1 was disabled -- an operator
     # reading the log saw a session window the live engine no longer obeys.

@@ -388,7 +388,7 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
         trust_section = ""
 
     return (
-        f"📌 <b>GETSIGNALZ AI — DASHBOARD</b>\n"
+        f"📌 <b>GETSIGNAL AI — DASHBOARD</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{open_section}\n\n"
         f"{bal_section}\n\n"
