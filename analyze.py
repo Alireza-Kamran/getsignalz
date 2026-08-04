@@ -71,8 +71,19 @@ def full_report():
         lines.append("=" * 60)
         return "\n".join(lines)
 
-    wins   = [t for t in trades if t["result"] == "tp"]
-    losses = [t for t in trades if t["result"] == "sl"]
+    # A trade is a win if it MADE MONEY, not if it exited via the take-profit.
+    # Strategy 2 cancels its TP the moment the ratchet arms and exits every
+    # single trade -- winners included -- through the stop, so result=="tp" is
+    # unreachable under the live engine and classifying on it reported 0% win
+    # rate on every coin, every score band and every factor while total P&L was
+    # positive. That is not cosmetic: the standing coin-removal bar is "<30% WR
+    # AND negative total P&L over 5+ trades", and the WR half of it was stuck at
+    # 0 for all coins. (Found 2026-08-04, with AVAX showing WR:0% AvgPnL:+15.7%.)
+    def _won(t):
+        return (t.get("lev_pct") or 0) > 0
+
+    wins   = [t for t in trades if _won(t)]
+    losses = [t for t in trades if not _won(t)]
 
     # ── Per-coin performance ───────────────────────────────────────
     lines.append(f"\n── PER-COIN PERFORMANCE ──")
@@ -80,13 +91,40 @@ def full_report():
     for t in trades:
         c = t["coin"]
         coin_stats[c]["n"] += 1
-        coin_stats[c]["w"] += 1 if t["result"]=="tp" else 0
+        coin_stats[c]["w"] += 1 if _won(t) else 0
         coin_stats[c]["pct_sum"] += t.get("lev_pct", 0) or 0
 
     for coin, cs in sorted(coin_stats.items(), key=lambda x: -x[1]["pct_sum"]):
         wr = cs["w"]/cs["n"]*100
         ev = cs["pct_sum"]/cs["n"]
         lines.append(f"  {coin:<8} {cs['n']} trades  WR:{wr:.0f}%  AvgPnL:{ev:+.1f}%")
+
+    # ── R-multiple distribution ────────────────────────────────────
+    # The published leveraged % is distorted by whatever leverage Hyperliquid
+    # actually grants: strategy2.signal sizes so a 1R stop costs MAX_LEV_LOSS
+    # (20%), but the exchange clamps it, so two near-symmetric +-1R ETH trades
+    # printed as -26.1% and +17.4% (2026-08-02). Account risk is unaffected --
+    # size comes from risk_usd / stop distance -- but only R is comparable
+    # between trades, and R is what every backtest reports. Read this table.
+    r_vals = []
+    for t in trades:
+        entry, sl, ex = t.get("entry"), t.get("sl"), t.get("exit")
+        d = t.get("direction")
+        if None in (entry, sl, ex) or not d or entry == sl:
+            continue
+        r_vals.append((t["coin"], (ex - entry) * d / abs(entry - sl)))
+
+    lines.append(f"\n── R-MULTIPLE DISTRIBUTION ──")
+    if r_vals:
+        rs = [r for _, r in r_vals]
+        n  = len(rs)
+        lines.append(f"  n={n}  sumR:{sum(rs):+.2f}  meanR:{sum(rs)/n:+.3f}  "
+                     f"WR:{sum(1 for r in rs if r>0)/n*100:.0f}%")
+        lines.append(f"  best:{max(rs):+.2f}R  worst:{min(rs):+.2f}R  "
+                     f"  >=1.5R:{sum(1 for r in rs if r>=1.5)}  >=3R:{sum(1 for r in rs if r>=3)}")
+        lines.append("  " + "  ".join(f"{c}:{r:+.2f}" for c, r in r_vals[-12:]))
+    else:
+        lines.append("  (no trades with complete entry/sl/exit/direction)")
 
     # ── Confluence factor analysis ─────────────────────────────────
     lines.append(f"\n── CONFLUENCE FACTOR WIN RATES ──")
@@ -98,11 +136,11 @@ def full_report():
                     and s["time"][:10]==t["open_time"][:10]), None)
         if not sig:
             continue
-        result = t["result"]
+        won = _won(t)
         for reason in sig.get("reasons", []):
             # Normalize reason to factor key
             key = reason.split(" ")[0].lower() if reason else "unknown"
-            if result == "tp":
+            if won:
                 factor_stats[key]["win"] += 1
             else:
                 factor_stats[key]["lose"] += 1
@@ -123,8 +161,8 @@ def full_report():
                     if s["coin"]==t["coin"]
                     and s["time"][:10]==t["open_time"][:10]), None)
         score = sig["score"] if sig else 0
-        score_stats[score]["win"]  += 1 if t["result"]=="tp" else 0
-        score_stats[score]["lose"] += 1 if t["result"]=="sl" else 0
+        score_stats[score]["win"]  += 1 if _won(t) else 0
+        score_stats[score]["lose"] += 1 if not _won(t) else 0
         score_stats[score]["pct"]  += t.get("lev_pct", 0) or 0
 
     for score in sorted(score_stats.keys()):

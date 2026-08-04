@@ -6,6 +6,60 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.26.0 — 2026-08-04 — THE EXIT PARAMETERS WERE TUNED ON A MODEL LIVE CANNOT REPRODUCE
+
+**Stats:** live n=5 (BTC LONG closed 08-03 at +13.3% / +0.706R). WR 60%, meanR +0.156,
+total P&L +7.2%, maxDD -2.8%. Book flat. One parameter reverted, three bugs fixed, one new tool.
+
+**`TRAIL_START_R` 0.75 → 1.00, reverting 08-02.** `portfolio2.simulate` drives the ratchet off
+the bar **close** and does not test the freshly-raised stop until the **next bar** — it grants
+every raised stop a full bar of immunity that no real stop has. `live._check_trail_s2` polls the
+mid every ~20s and places the stop **at the market** the instant price prints the level. First
+live proof: **BTC armed at +0.75R at 13:49:56 and filled 22 seconds later at +0.706R.**
+
+New `sweep_trail_mode.py` measures both achievable bounds (asserts equivalence with portfolio2
+at `mode="close"`, printed OK). 20 coins, 5000 bars, real prices, fees, cap 2:
+
+| model | n | WR | net | EV | t | ex-top5 | ≥1.5R |
+|---|---|---|---|---|---|---|---|
+| close (portfolio2) | 121 | 57.0% | +42.49% | +0.351% | 2.62 | +18.56% | 19 |
+| touch_opt | 122 | 58.2% | +34.65% | +0.284% | 2.45 | +15.02% | 15 |
+| touch_pess | 122 | 59.0% | +8.74% | +0.072% | 0.83 | -2.81% | 7 |
+
+**The close row sits above the optimistic bound — outside the range live can occupy.** Note the
+signature: win rate goes *up* as EV collapses. A stop placed on the price rescues near-misses and
+truncates runners, and this strategy's EV lives entirely in the runners.
+
+Under both achievable models the 0.75-vs-1.00 ordering **inverts**, monotonically — 0.75 is a
+local *minimum* under the pessimistic bound. 1.00 beats it at cap 2, cap 4 and under alphabetical
+ranking, is positive in both out-of-sample halves under both models (0.75 is negative in-sample),
+and is the only setting with non-negative `ex-top5`. Chose 1.00 over the better-scoring 1.25/1.50
+because the curve runs monotone to the edge of the swept range, and picking a monotone boundary is
+a mechanical fact, not a measured edge. Recorded honestly: at cap 1 the two **tie**. The cost is
+deliberate — win rate drops ~5pp while EV rises. A per-rung "gap" fix was built, measured, and
+**rejected** as non-monotonic noise.
+
+**Live corroboration (n=5):** best trade **+0.99R, zero above 1.5R**, all three winners pinned at
+the arming level. Winners average 4.5h, losers 17.2h.
+
+**Bugs fixed:**
+- `analyze.full_report` classified wins as `result=="tp"` — unreachable under S2, which cancels the
+  TP and exits *every* trade via the stop. Every coin, score band and factor read **WR 0% while
+  P&L was positive** (AVAX printed `WR:0% AvgPnL:+15.7%`). The standing coin-removal bar is
+  "<30% WR AND negative P&L over 5+ trades", so its WR half was stuck at 0 for everything.
+- Added an **R-multiple distribution** section to the report — in R, not leveraged %, because the
+  exchange leverage clamp distorts the published number.
+- **The Telegram channel has been unreachable since 08-03 22:01 UTC** (`@GetSignalz` →
+  `chat not found`; token fine, owner DM fine). It produced 194 identical log lines in 4 hours and
+  escalated nothing — `tg.send` was silently returning `None` on rejection. Added
+  `tg.note_channel_failure()`: DMs the owner, suppresses the spam. **Restoring the channel needs
+  Mr G.**
+- `test_ratchet` case 2b hard-coded a 0.9R peak, silently encoding `TRAIL_START_R < 0.9`; now
+  derived from the constants. 10/10 pass.
+
+`portfolio2.py`'s docstring now carries an explicit warning that it is **invalid for exit-side
+parameters** and valid for entry-side ones. `trader.py` byte-identical for the 6th night.
+
 ## v1.25.0 — 2026-08-03 — THE TAKE-PROFIT HAD BECOME A TRUNCATION DEVICE
 
 **Stats:** live n unchanged at 4 (no signal since 08-01 20:01, ~30h quiet). Book flat.

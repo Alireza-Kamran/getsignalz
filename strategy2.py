@@ -224,20 +224,80 @@ MAX_TRADES = 2
 # 0.75R, not 1.00R), which is why net return barely moves. The gain is in the
 # risk profile, not the return: win rate +6.3pp and max drawdown ~28% smaller.
 #
-# 0.75 over the slightly better-scoring 0.70 because the whole 0.65-0.85 band is
-# flat (net +33.7 to +36.7, t 2.24-2.43) and picking the peak inside a flat band
-# is fitting noise; 0.75 is a round number with strong neighbours on both sides.
-# Survives the standing rejection tests: better than 1.0 at concurrency cap 1, 2
-# and 4, and under alphabetical instead of |stretch| selection. Caveat kept in
-# plain sight -- it is 4-of-7 positive months against 1.0's 5-of-7 (February
-# moves +0.9% -> -0.1%, i.e. zero either way) and still tail-dependent.
+# REVERTED TO 1.00 on 2026-08-04. The table above is not wrong, it is measured
+# against a model live cannot reproduce, and every row of it inherits that flaw.
+#
+# portfolio2.simulate drives the ratchet off the bar CLOSE and, having raised the
+# stop at the end of a bar, does not test that stop until the NEXT bar. Its
+# docstring called close-driving "the conservative proxy for a level price
+# actually held long enough for a 20s poll to act on". That is conservative about
+# WHEN the stop arms and silently optimistic about whether it SURVIVES -- it
+# grants each freshly-raised stop a full bar of immunity that no real stop has.
+#
+# live._check_trail_s2 polls the mid every ~20s and places the stop at exactly
+# TRAIL_START_R the instant price prints it -- i.e. AT the market, with no
+# cushion at all. The first live trade to arm settled it: BTC 2026-08-03 armed at
+# +0.75R at 13:49:56 and was filled 22 seconds later at +0.706R.
+#
+# sweep_trail_mode.py re-measures both achievable bounds (it asserts it
+# reproduces portfolio2 exactly at mode="close", so the rows are comparable).
+# 20 coins, 5000 bars, real prices, fees in, cap 2:
+#
+#   model        n    WR      net      EV/trade   t     ex-top5  >=1.5R  >=3R
+#   close       121  57.0%  +42.49%   +0.351%   2.62   +18.56%    19      8
+#   touch_opt   122  58.2%  +34.65%   +0.284%   2.45   +15.02%    15      7
+#   touch_pess  122  59.0%   +8.74%   +0.072%   0.83    -2.81%     7      2
+#
+# The close row sits ABOVE the optimistic bound, i.e. outside the range live can
+# occupy at all. Note the signature: win rate goes UP as EV collapses. Placing
+# the stop on top of the price rescues near-misses and truncates runners, and
+# this strategy's entire EV is in the runners.
+#
+# Under both achievable models the 0.75-vs-1.00 ordering INVERTS, monotonically
+# (net acct %):
+#
+#   TRAIL_START_R   close    touch_opt   touch_pess
+#   0.50           +30.07     +33.51      +12.26
+#   0.75           +42.49     +34.65       +8.74     <- local MINIMUM under pess
+#   1.00           +40.92     +40.45      +14.54
+#   1.25           +40.20     +49.26      +23.98
+#   1.50           +40.70     +52.61      +25.17
+#
+# Mechanically obvious once seen: if arming places the stop at market, arming
+# early truncates early. 1.00 and not 1.25/1.50 because the curve is monotone to
+# the edge of the swept range, and picking the boundary of a monotone
+# relationship is a mechanical fact, not a measured edge -- the same reasoning
+# that kept TRAIL_STEP_R at 0.25 and TP_R off "none". 1.00 is also not a newly
+# fitted value: it is what ran until 2026-08-02, so this reverts a change made on
+# bad evidence rather than fitting a fresh one.
+#
+# Rejection tests vs 0.75, run under BOTH achievable models: wins at cap 2
+# (+39.71/+14.54 vs +33.91/+8.74), cap 4 (+40.55/+12.74 vs +35.00/+7.93) and
+# under alphabetical selection (+38.67/+13.50 vs +33.12/+7.70); positive in BOTH
+# out-of-sample halves under both models, where 0.75 is NEGATIVE in-sample under
+# touch_pess (-2.47%); and it is the only setting whose ex-top5 is non-negative
+# under the pessimistic bound (+0.54% vs -2.81%), which speaks directly to this
+# strategy's known tail-dependence. Recorded honestly: at concurrency cap 1 the
+# two are a TIE (+22.80/+5.16 vs +22.78/+5.71) -- 0.75 is marginally ahead on the
+# pessimistic bound there. Cap 1 is not the deployed setting (MAX_TRADES=2).
+#
+# The cost is real and is the exact thing 2026-08-02 bought: the 15.3% of trades
+# that peak between 0.5R and 1.0R go back to being full stops, and win rate drops
+# ~5pp (touch_pess 59.0% -> 53.7%). EV rises anyway (+0.072% -> +0.120%). Lower
+# win rate, higher expected value, taken deliberately.
 #
 # TRAIL_STEP_R deliberately NOT changed. Smaller is monotonically better (0.1
 # -> +34.4%, 0.25 -> +32.4%, 0.5 -> +28.3%, 1.0 -> +25.4%) with no plateau, so
 # the optimum sits at the boundary -- that is a smooth mechanical relationship,
 # not a measured edge, and chasing it means more stop-modification calls on the
-# exact path whose failure mode had to be fixed on 2026-07-30.
-TRAIL_START_R = 0.75
+# exact path whose failure mode had to be fixed on 2026-07-30. Re-checked at
+# TRAIL_START_R=1.00 under both new models: 0.25 still beats 0.50.
+#
+# A per-rung "gap" that forbids the stop from resting within X R of price was
+# built and MEASURED as the direct fix for at-market placement, then rejected:
+# it is non-monotonic noise (touch_pess at tsr=0.75 goes +8.74 -> +4.56 -> +3.11
+# -> +1.03 -> +13.09 across gap 0 -> 0.5). See sweep_trail_mode.py.
+TRAIL_START_R = 1.00
 TRAIL_STEP_R  = 0.25
 
 

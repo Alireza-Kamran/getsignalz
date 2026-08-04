@@ -19,6 +19,7 @@ from config import TELEGRAM_TOKEN as TOKEN, TELEGRAM_CHANNEL as CHANNEL, HYPERLI
 from trader import WATCHLIST, TRAIL_R_STEP
 import strategy2
 import analyze
+import tg
 CHANNEL_USERNAME = CHANNEL.lstrip("@")
 BASE     = f"https://api.telegram.org/bot{TOKEN}"
 STATE_F  = "/root/trade/state.json"
@@ -97,7 +98,11 @@ def _edit(msg_id, text):
                 retry_after = d.get("parameters", {}).get("retry_after", 5)
                 time.sleep(min(retry_after, 10))
                 continue
-            print(f"[tracker] edit {msg_id} failed: {d.get('description')}")
+            desc = d.get("description")
+            # A chat-level outage repeats every refresh (~60s) and would bury
+            # every other error in the log; tg escalates it once and we go quiet.
+            if not tg.note_channel_failure(desc, f"dashboard edit {msg_id}"):
+                print(f"[tracker] edit {msg_id} failed: {desc}")
             return
         except Exception as e:
             if attempt < 2:

@@ -25,8 +25,24 @@ Exit rules are a faithful copy of backtest2.backtest_coin under the live
 ratchet semantics (partial_at_r=1.0, partial_pct=0.0, trail_step_r=0.25): the
 fixed take-profit is dropped, the stop locks at 1R and ratchets one rung every
 0.25R of further favourable excursion, and the trade exits only when that stop
-is taken out. The ratchet is driven by the bar CLOSE, the conservative proxy
-for a level price actually held long enough for a 20s poll to act on.
+is taken out. The ratchet is driven by the bar CLOSE.
+
+WARNING (2026-08-04): close-driving was described here as "the conservative
+proxy for a level price actually held long enough for a 20s poll to act on".
+That was wrong, and it is the reason TRAIL_START_R was set to 0.75 on 2026-08-02
+and had to be reverted. It is conservative about WHEN the stop arms and silently
+optimistic about whether the stop SURVIVES: raising the stop at the end of a bar
+and not testing it until the next one grants every freshly-raised stop a full
+bar of immunity that no real stop has. live._check_trail_s2 places the stop AT
+the market the instant price prints the level (BTC 2026-08-03: armed +0.75R at
+13:49:56, filled 22s later at +0.706R).
+
+This model therefore scores ABOVE the optimistic bound on live behaviour -- it
+is outside the achievable range, not inside it. It remains useful for
+apples-to-apples comparison of entry-side questions (MAX_ADX, RSI, stretch,
+extra coins, the concurrency cap), which is what it was built for. Do NOT use it
+to choose any exit-side parameter; use sweep_trail_mode.py, which reports both
+achievable bounds and asserts equivalence with this file at mode="close".
 
 Prices are the REAL exchange OHLC. indicators.fetch_candles leaves Heikin Ashi
 in the open/high/low/close columns and the true prices in real_*; walking a

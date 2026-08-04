@@ -2,11 +2,63 @@
 Telegram channel integration.
 ALL percentages shown are LEVERAGED — never raw price movement.
 """
-import requests, os
+import requests, os, time
 from datetime import datetime
 
 from config import TELEGRAM_TOKEN as TOKEN, TELEGRAM_CHANNEL as CHANNEL, TELEGRAM_OWNER_ID as OWNER_ID
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
+
+
+# ── Channel-outage escalation ────────────────────────────────────────────────
+# The channel IS the product. When Telegram rejects a post at the CHAT level --
+# the username stops resolving, or the bot loses its membership -- signals,
+# result cards and the dashboard all vanish at once while the bot keeps trading
+# perfectly happily, and the only trace is one identical line per refresh in
+# bot.log. That is exactly what happened on 2026-08-03 22:01 UTC: '@GetSignalz'
+# began returning "chat not found" and produced 194 identical lines in four
+# hours, discovered only by a manual audit the next night. Same failure class as
+# the silent self-learn cron of 2026-07-23 -- a thing that breaks quietly and is
+# found late. The owner DM is a different chat and keeps working, so use it.
+_CHANNEL_DOWN_MARKERS = (
+    "chat not found", "bot was kicked", "bot is not a member",
+    "not enough rights", "have no rights", "chat was upgraded",
+    "user is deactivated", "chat_id is empty",
+)
+_CHANNEL_ALERT_COOLDOWN_S = 3600
+_channel_alert = {"desc": None, "at": 0.0}
+
+
+def note_channel_failure(desc, where=""):
+    """Escalate a chat-level Telegram rejection to the owner, at most hourly.
+
+    Returns True if this looked like a channel outage rather than a problem with
+    one particular message, so callers can suppress their own per-attempt log
+    line and stop the spam that would otherwise bury real errors.
+    """
+    d = (desc or "").lower()
+    if not any(m in d for m in _CHANNEL_DOWN_MARKERS):
+        return False
+    now = time.time()
+    if _channel_alert["desc"] == d and now - _channel_alert["at"] < _CHANNEL_ALERT_COOLDOWN_S:
+        return True
+    # Past the cooldown gate above, so this is either the first failure, a
+    # DIFFERENT cause than last time, or the same outage still unfixed an hour
+    # later. All three are worth a DM: the 2026-08-03 outage ran four hours
+    # undetected, and an hourly nudge is cheap next to a dark channel.
+    _channel_alert.update(desc=d, at=now)
+    print(f"[TG] CHANNEL UNREACHABLE ({where}): {desc}")
+    dm_owner(
+        "🚨 کانال در دسترس نیست\n\n"
+        "تلگرام ارسال به این کانال را رد می کند:\n"
+        f"<code>{CHANNEL}</code>\n\n"
+        "پیام خطا:\n"
+        f"<code>{str(desc)[:120]}</code>\n\n"
+        "سیگنال و کارت نتیجه و داشبورد ارسال نمی شود.\n"
+        "ربات به معامله ادامه می دهد.\n\n"
+        "لطفا نام کانال و عضویت ربات را بررسی کنید."
+    )
+    return True
+
 
 _counter_file = "/root/trade/.signal_count"
 
@@ -28,7 +80,14 @@ def send(text: str, parse_mode="HTML", disable_preview=True):
             "disable_web_page_preview": disable_preview,
         }, timeout=10)
         d = r.json()
-        return d["result"]["message_id"] if d.get("ok") else None
+        if d.get("ok"):
+            return d["result"]["message_id"]
+        # Was silent before 2026-08-04: a rejected signal post returned None and
+        # left no trace anywhere, so the channel could be down for hours with the
+        # bot still trading and nothing to show for it.
+        if not note_channel_failure(d.get("description"), "send"):
+            print(f"[TG] send rejected: {d.get('description')}")
+        return None
     except Exception as e:
         print(f"[TG] send failed: {e}")
         return None

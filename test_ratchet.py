@@ -83,13 +83,16 @@ def main():
                 and abs(t["sl"] - (100.0 + start)) < 1e-9)
     ok &= check("cancels TP (entry=None)", f.calls and f.calls[0]["entry"] is None)
 
-    # 2b. The point of arming below TP_R (2026-08-02): a trade that runs most of
-    #     the way to target and then reverses must exit in PROFIT rather than at
-    #     a full stop. Peak 0.9R, then back through the entry.
+    # 2b. A trade that peaks between the arming threshold and TP_R -- i.e. it
+    #     runs but never reaches the backstop -- must exit in PROFIT rather than
+    #     at a full stop. Derived from the constants, not hard-coded: this case
+    #     used to pin the peak at 0.9R, which silently encoded TRAIL_START_R
+    #     being below 0.9 and broke the moment it went back to 1.0 on 2026-08-04.
+    peak = start + (strategy2.TP_R - start) / 2.0
     runner = _trade()
-    _run(100.9, runner)
-    ok &= check("sub-TP peak leaves a profitable stop",
-                runner["sl"] > 100.0 and runner["locked_r"] >= start,
+    _run(100.0 + peak, runner)
+    ok &= check("sub-TP peak (%.2fR) leaves a profitable stop" % peak,
+                runner["sl"] > 100.0 and start <= runner["locked_r"] <= peak,
                 "sl=%.4f locked=%s" % (runner["sl"], runner["locked_r"]))
 
     # 3. Rung arithmetic: 1.6R -> int(0.6/0.25)=2 rungs -> locked 1.5R.
