@@ -106,13 +106,57 @@ def edit(msg_id, text: str):
         print(f"[TG] edit failed: {e}")
 
 
+DM_LIMIT = 3900   # Telegram hard-rejects above 4096; leave room for the counter.
+
+
+def _split_for_telegram(text, limit=DM_LIMIT):
+    """Split on line boundaries so HTML tags, which never span a line here,
+    stay balanced within each chunk."""
+    chunks, cur = [], ""
+    for line in text.split("\n"):
+        piece = line if not cur else cur + "\n" + line
+        if len(piece) <= limit:
+            cur = piece
+            continue
+        if cur:
+            chunks.append(cur)
+        # A single line longer than the limit is the only case we must cut
+        # blind; hard-wrap it rather than lose it.
+        while len(line) > limit:
+            chunks.append(line[:limit])
+            line = line[limit:]
+        cur = line
+    if cur:
+        chunks.append(cur)
+    return chunks or [""]
+
+
 def dm_owner(text: str):
-    try:
-        requests.post(f"{BASE_URL}/sendMessage", json={
-            "chat_id": OWNER_ID, "text": text, "parse_mode": "HTML",
-        }, timeout=10)
-    except Exception as e:
-        print(f"[TG] DM failed: {e}")
+    """Send to the owner DM, splitting anything over Telegram's length limit.
+
+    Silently dropped long messages before 2026-08-04: the nightly self-learn
+    report is the whole visible output of a session, and at 6328 chars it was
+    rejected with "message is too long" while this function swallowed the
+    response and returned as if it had worked. Same silent-failure class as the
+    channel outage fixed the same night -- a rejection nobody ever sees.
+    """
+    parts = _split_for_telegram(text)
+    n = len(parts)
+    ok = True
+    for i, part in enumerate(parts, 1):
+        body = part if n == 1 else f"{part}\n\n<i>({i}/{n})</i>"
+        try:
+            r = requests.post(f"{BASE_URL}/sendMessage", json={
+                "chat_id": OWNER_ID, "text": body, "parse_mode": "HTML",
+            }, timeout=10)
+            d = r.json()
+            if not d.get("ok"):
+                ok = False
+                print(f"[TG] DM rejected ({i}/{n}): {d.get('description')}")
+        except Exception as e:
+            ok = False
+            print(f"[TG] DM failed ({i}/{n}): {e}")
+    return ok
 
 
 def dm_owner_file(path, caption=""):
