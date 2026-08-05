@@ -23,7 +23,11 @@ import tg
 CHANNEL_USERNAME = CHANNEL.lstrip("@")
 BASE     = f"https://api.telegram.org/bot{TOKEN}"
 STATE_F  = "/root/trade/state.json"
-TESTNET  = "https://api.hyperliquid-testnet.xyz"
+# Dead since the tracker moved to executor's shared client; kept only so an
+# accidental reintroduction inherits the USE_TESTNET switch rather than
+# hardcoding a book again, which is the bug fixed in indicators.py on
+# 2026-08-05.
+from executor import BASE_URL as HL_URL
 
 _lock    = threading.Lock()
 _running = False

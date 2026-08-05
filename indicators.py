@@ -3,7 +3,27 @@ import pandas as pd
 from hyperliquid.info import Info
 import time
 
+from config import USE_TESTNET
+
 TESTNET_URL = "https://api.hyperliquid-testnet.xyz"
+MAINNET_URL = "https://api.hyperliquid.xyz"
+
+# Follows USE_TESTNET, exactly as executor.py:14-18 already does for orders.
+# It did NOT until 2026-08-05: TESTNET_URL was hardcoded into fetch_candles, so
+# signals and orders could read different books, and every backtest this project
+# ever ran was computed on testnet candles. That feed is not a proxy for the real
+# one -- measured over 5000 bars on the 20-coin watchlist, 18.5% of testnet bars
+# repeat the previous close and 17.1% have zero volume, against 0.4% and 0.0% on
+# mainnet; 12 of the 20 coins are above 10% frozen and FIL/XLM/LDO are near 45%.
+# Frozen bars collapse ATR, which inflates stretch = (close-ema)/atr past
+# MIN_STRETCH_ATR for free and then manufactures a "reversion" when the feed
+# resumes with a gap. Re-running the harness on mainnet candles inverted the
+# headline result it produced (no-ADX-gate: +240.9% -> -50.7%).
+#
+# Module-level so research scripts can point the harness at the other book
+# deliberately (`indicators.BASE_URL = indicators.MAINNET_URL`) without editing
+# config or touching the live path.
+BASE_URL = TESTNET_URL if USE_TESTNET else MAINNET_URL
 
 # See executor.HTTP_TIMEOUT for why this is not optional: the SDK defaults to
 # timeout=None and will block forever on a half-open socket. This module is
@@ -12,7 +32,7 @@ HTTP_TIMEOUT = (5, 20)
 
 
 def fetch_candles(symbol="ETH", interval="1h", lookback_bars=350):
-    info = Info(TESTNET_URL, skip_ws=True, timeout=HTTP_TIMEOUT)
+    info = Info(BASE_URL, skip_ws=True, timeout=HTTP_TIMEOUT)
     end_ms = int(time.time() * 1000)
     interval_ms = {"1m":60000,"5m":300000,"15m":900000,"1h":3600000,"4h":14400000,"1d":86400000}
     start_ms = end_ms - lookback_bars * interval_ms[interval]

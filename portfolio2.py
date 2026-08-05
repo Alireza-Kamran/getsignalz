@@ -55,7 +55,7 @@ import sys
 import pandas as pd
 
 import strategy2 as s2
-from backtest2 import TAKER_FEE
+from backtest2 import TAKER_FEE, SLIPPAGE_PER_SIDE, round_trip_cost
 
 RISK_DIVISOR = 20.0
 # A trade is sized so a full stop costs MAX_LEV_LOSS (20%) of the leveraged
@@ -162,7 +162,10 @@ def frame(trades):
     df = pd.DataFrame(trades).sort_values("open_ts").reset_index(drop=True)
     r_as_pct = abs(df["entry"] - df["sl_orig"]) / df["entry"]
     gross = df["total_r"] * r_as_pct * 100 * df["leverage"]
-    df["acct"] = (gross - TAKER_FEE * 2 * df["leverage"] * 100) / RISK_DIVISOR
+    # Fee AND slippage. TAKER_FEE was 0.00035 against a real 0.00045, and
+    # slippage was priced at zero, so every figure this simulator produced was
+    # net of roughly two thirds of its true cost.
+    df["acct"] = (gross - round_trip_cost(df["leverage"])) / RISK_DIVISOR
     return df
 
 

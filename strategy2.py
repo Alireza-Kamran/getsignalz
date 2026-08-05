@@ -134,13 +134,40 @@ def build_df(coin, tf="1h", bars=1500):
     if df is None or len(df) < EMA_LEN + 50:
         return None
     df = df.copy()
+
+    # Drop non-trading bars BEFORE the indicators are computed, not after.
+    #
+    # A bar with no volume is not a quiet market, it is a gap in the feed, and
+    # it poisons this strategy's trigger specifically: ATR collapses toward zero
+    # across a run of them, and stretch = (close - ema) / atr then clears
+    # MIN_STRETCH_ATR on noise. When the feed resumes with a gap, that reads as
+    # the "reversion" the strategy exists to trade.
+    #
+    # This mattered enormously because every backtest ran on testnet candles
+    # until 2026-08-05 (see indicators.BASE_URL): 17.1% of testnet bars have
+    # zero volume against 0.0% on mainnet, and 12 of the 20 watchlist coins were
+    # above 10% frozen. Filtering after computing indicators would not help --
+    # the contamination is inside the indicator values.
+    if "volume" in df.columns:
+        df = df[df["volume"] > 0]
+        if len(df) < EMA_LEN + 50:
+            return None
+
     df["rsi"] = rsi(df["close"], RSI_LEN)
     adx_v, _, _ = adx(df["high"], df["low"], df["close"], ADX_LEN)
     df["adx"] = adx_v
     df["atr"] = atr(df["high"], df["low"], df["close"], ATR_LEN)
     df["ema"] = ema_line(df["close"], EMA_LEN)
     df["stretch"] = (df["close"] - df["ema"]) / df["atr"]
-    return df.dropna(subset=["rsi", "adx", "atr", "ema", "stretch"])
+    df = df.dropna(subset=["rsi", "adx", "atr", "ema", "stretch"])
+
+    # Live freshness guard, ported from trader.py:117. A feed that has printed
+    # the same close three bars running is stale; acting on it would size a
+    # trade off an ATR that no longer describes the market.
+    price_col = "real_close" if "real_close" in df.columns else "close"
+    if len(df) >= 3 and df[price_col].iloc[-3:].nunique() == 1:
+        return None
+    return df
 
 
 def signal(df, i=-1):

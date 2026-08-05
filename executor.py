@@ -71,10 +71,45 @@ def _hl_call(fn, *args, retries=4, **kwargs):
 
 
 def get_account_value():
-    """Spot USDC balance — the actual funds in the account."""
+    """Tradeable equity: perp account value plus spot USDC.
+
+    Read the perp wallet too, and never silently return 0.0.
+
+    This read spot USDC alone and defaulted to 0.0 on any failure. Perps are
+    margined from the PERP wallet, so on an account funded the normal way the
+    sizing input was a balance the bot cannot trade with. Verified 2026-08-05:
+    mainnet spot $9.51 / perp $0.00, testnet spot $639.36 / perp $0.00.
+
+    The 0.0 default was the more dangerous half. risk_usd = 0 makes notional 0,
+    which lands in open_trade's below-minimum branch -- which, before it was
+    fixed, ordered 0.1 of the coin. A failed HTTP call and an unfunded spot
+    wallet both reached it. Raising means a transient failure skips a candle
+    instead of sizing an order off a balance that was never read.
+    """
     info, _ = _clients()
-    spot = _hl_call(info.spot_user_state, ACCOUNT_ADDRESS)
-    return next((float(b["total"]) for b in spot["balances"] if b["coin"] == "USDC"), 0.0)
+    perp = spot = 0.0
+
+    state = _hl_call(info.user_state, ACCOUNT_ADDRESS)
+    if state is None:
+        raise RuntimeError("account value unavailable: perp user_state failed")
+    perp = float(state.get("marginSummary", {}).get("accountValue", 0) or 0)
+
+    try:
+        sp = _hl_call(info.spot_user_state, ACCOUNT_ADDRESS)
+        if sp:
+            spot = next((float(b["total"]) for b in sp.get("balances", [])
+                         if b["coin"] == "USDC"), 0.0)
+    except Exception as e:
+        # Spot is the smaller half on a normally-funded account; a perp read
+        # that succeeded is still a usable number.
+        logger.warning(f"spot balance unavailable ({e}) — using perp only")
+
+    total = perp + spot
+    if total <= 0:
+        raise RuntimeError(
+            f"account value is zero (perp={perp:.2f} spot={spot:.2f}) — "
+            f"refusing to size an order")
+    return total
 
 
 def get_positions():
@@ -168,9 +203,29 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
         notional = account_val * leverage * 0.1
     sz = _round_sz(notional / price, coin=coin)
 
-    # Minimum $10 notional
+    # Below the exchange minimum, ABORT -- never resize up.
+    #
+    # This used to read `sz = _round_sz(10.0 / price + 0.1, coin=coin)`. The
+    # `+ 0.1` adds a tenth of a COIN, not a tenth of a dollar: on BTC it turns a
+    # $10 floor into a ~$6,400 order, roughly 3200x the intended risk budget.
+    #
+    # The branch fires when `sz * price < 10`, and its most likely cause is
+    # risk_usd == 0, which happens whenever get_account_value() cannot read a
+    # balance. Before the fix below it defaulted to 0.0 on failure, so an
+    # unreadable wallet and a wrong-wallet lookup both landed here. A size that
+    # misses the minimum means the risk budget is already wrong; inflating it is
+    # never the right recovery.
     if sz * price < 10:
-        sz = _round_sz(10.0 / price + 0.1, coin=coin)
+        msg = (f"{coin}: computed size ${sz * price:.2f} is below the $10 "
+               f"exchange minimum (risk_usd=${risk_usd:.2f}, "
+               f"account=${account_val:.2f}) — trade aborted")
+        logger.error(msg)
+        try:
+            import tg
+            tg.dm_owner(f"⚠️ <b>Order aborted</b>\n{msg}")
+        except Exception:
+            pass
+        return None
 
     is_buy = direction == 1
     logger.info(f"Opening {'LONG' if is_buy else 'SHORT'} {sz} {coin} @ ~${price:.4f} | SL=${sl_price:.4f} TP=${tp_price:.4f}")

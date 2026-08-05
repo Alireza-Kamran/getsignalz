@@ -10,7 +10,31 @@ import pandas as pd
 
 import strategy2 as s2
 
-TAKER_FEE = 0.00035
+# Verified against the live account 2026-08-05 via info.user_fees: userCrossRate
+# is 0.00045 on BOTH networks (userAddRate 0.00015). This was 0.00035, a 29%
+# understatement, on every result this project has quoted.
+#
+# Both legs are taker: entries go in via exchange.market_open (executor.py:179)
+# and exits fire market-trigger stops (executor.py isMarket=True), so neither
+# side earns the maker rate.
+TAKER_FEE = 0.00045
+
+# Per-side slippage, previously modelled as exactly zero. Entries are market
+# orders sent with slippage=0.01 tolerance; exits are stop-markets, which fill
+# at whatever is there when triggered. 1bp/side is a deliberately mild opening
+# assumption -- the real figure is measurable from live fills (signal price vs
+# entry fill, stop trigger vs stop fill) and is not yet measured, so treat this
+# as a placeholder to be replaced with data, not as a calibrated number.
+SLIPPAGE_PER_SIDE = 0.0001
+
+
+def round_trip_cost(leverage):
+    """Total taker cost of one round trip, as a % of margin.
+
+    Scales with leverage because the fee is charged on notional while returns
+    here are denominated in margin.
+    """
+    return (TAKER_FEE + SLIPPAGE_PER_SIDE) * 2 * leverage * 100
 
 
 def backtest_coin(coin, tf="1h", bars=5000, start=None, end=None,
@@ -177,7 +201,13 @@ def r_pct(t, fee=0.0):
     else:
         raw = (t["exit"] - t["entry"]) / t["entry"]
         gross = raw * 100 * t["direction"] * t["leverage"]
-    return gross - (fee * 2 * t["leverage"] * 100 if fee else 0.0)
+    if not fee:
+        return gross
+    # Slippage rides along with the fee: callers pass TAKER_FEE to mean "net of
+    # costs", and pricing the fee while leaving slippage at zero was how the
+    # cost model stayed optimistic. round_trip_cost() carries both.
+    per_side = fee + (SLIPPAGE_PER_SIDE if fee == TAKER_FEE else 0.0)
+    return gross - per_side * 2 * t["leverage"] * 100
 
 
 def summarize(trades, label=""):

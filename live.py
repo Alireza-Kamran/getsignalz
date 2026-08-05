@@ -355,7 +355,18 @@ def _check_closed(positions, account_val):
             direction    = t["dir"]
             entry        = t["entry"]
             balance_before = t.get("balance_before", account_val)
-            balance_after  = get_account_value()
+            # get_account_value raises rather than returning a silent 0.0 (see
+            # its docstring). The trade is already popped from _open_trades by
+            # this point, so letting that propagate would drop the close record
+            # entirely -- the journal, the stats and the channel message would
+            # all be lost over a transient balance read. Balance is display-only
+            # here; the P&L below is derived from fill prices.
+            try:
+                balance_after = get_account_value()
+            except Exception as e:
+                logger.warning(f"{coin}: balance read failed on close ({e}) "
+                               f"— reporting with the pre-trade balance")
+                balance_after = balance_before
             price_move   = abs(exit_px - entry) / entry * 100
             lev_pct      = price_move * t["leverage"] * (
                 1 if (direction==1 and exit_px>entry) or (direction==-1 and exit_px<entry) else -1)
