@@ -71,7 +71,7 @@ Based on the data, answer every relevant question from this list:
 - Did any position run much further than my TP without me catching it?
 
 **Market regime:**
-- What ADX range did winning trades happen in? Consider raising MIN_ADX if low-ADX trades lose.
+- What ADX range did winning trades happen in? (Report only -- MAX_ADX is owner-locked.)
 - What RSI range at entry? Are there optimal entry RSI bands per direction?
 - What session hours produced the best results? Could I narrow the session window?
 - Did 4H macro trend filter help? Did any winning trade have a neutral/opposing 4H trend?
@@ -85,6 +85,27 @@ Based on the data, answer every relevant question from this list:
 - What is the current max drawdown? Is it acceptable?
 - With current leverage, are the % swings appropriate for the account size?
 - Should I vary leverage by ADX strength? (e.g., ADX>40 → higher leverage)
+
+## OWNER-LOCKED CONSTANTS — do not modify these under any circumstances
+
+These live in /root/trade/strategy2.py and define the deployed entry, exit
+and risk behaviour:
+
+    RSI_OVERSOLD, RSI_OVERBOUGHT, MAX_ADX, MIN_STRETCH_ATR, SL_ATR_MULT,
+    TP_R, TRAIL_START_R, TRAIL_STEP_R, MAX_TRADES, S2_RISK_PCT, WATCHLIST
+
+Every one of them was derived on Hyperliquid TESTNET candles, and on 2026-08-05
+the feed was found to carry 18.5% frozen bars against 0.4% on mainnet -- so all
+of their supporting figures are void and are being re-derived on real prices.
+Tuning them against 5 live trades, on numbers already known to be wrong, cannot
+produce a better value; it can only overwrite work in progress.
+
+If your analysis suggests one of them should change, SAY SO in the report and
+leave the code alone. Kamran decides these.
+
+You may still freely: fix bugs anywhere, improve reporting and analysis, adjust
+strategy_config.json (it belongs to the DISABLED S1 engine), and change any file
+other than strategy2.py.
 
 ## STEP 3 — Make actual changes
 
@@ -153,8 +174,26 @@ You are a professional trader who happened to also be a software engineer. You t
 '
 
 OUT_TMP="$(mktemp)"
+# Fingerprint the owner-locked file so an edit is detectable even if the session
+# does not mention it. acceptEdits means the session can write strategy2.py; the
+# prompt forbids it, this proves whether the prompt was honoured.
+LOCKED_BEFORE="$(md5sum /root/trade/strategy2.py | cut -d" " -f1)"
 timeout 3600 "$CLAUDE_BIN" -p --permission-mode acceptEdits "$PROMPT" > "$OUT_TMP" 2>&1
 RC=$?
+LOCKED_AFTER="$(md5sum /root/trade/strategy2.py | cut -d" " -f1)"
+if [ "$LOCKED_BEFORE" != "$LOCKED_AFTER" ]; then
+    echo "WARNING: strategy2.py was modified despite being owner-locked" >> "$LOG"
+    git -C /root/trade diff --stat strategy2.py >> "$LOG" 2>&1
+    python3 - <<'LOCKEOF' >> "$LOG" 2>&1
+import sys, subprocess
+sys.path.insert(0, "/root/trade")
+import tg
+d = subprocess.run(["git","-C","/root/trade","diff","strategy2.py"],
+                   capture_output=True, text=True).stdout[:1200]
+tg.dm_owner("\u26a0\ufe0f <b>Nightly session edited owner-locked strategy2.py</b>\n"
+            "<pre>" + (d or "(no git diff — file may be untracked)") + "</pre>")
+LOCKEOF
+fi
 cat "$OUT_TMP" >> "$LOG"
 echo "Session ended: $(date -u '+%H:%M UTC') (exit $RC)" >> "$LOG"
 

@@ -685,7 +685,10 @@ def run():
                             f"rsi={s2_best['rsi']} adx={s2_best['adx']} "
                             f"stretch={s2_best['stretch']}"
                         )
-                        risk2 = account_val * RISK_PCT
+                        # strategy2's own constant, NOT trader.RISK_PCT — the
+                        # latter is machine-rewritten nightly by review.py from
+                        # S1 statistics. See strategy2.S2_RISK_PCT.
+                        risk2 = account_val * strategy2.S2_RISK_PCT
                         res2  = open_trade(
                             coin=c2, direction=dir2, risk_usd=risk2,
                             sl_price=s2_best["sl"], tp_price=s2_best["tp"],

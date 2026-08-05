@@ -225,6 +225,22 @@ TF = "1h"
 # throttling it. Risk ceiling stays modest: 2 x RISK_PCT of the account.
 MAX_TRADES = 2
 
+# S2 sizes off its OWN risk constant, not trader.RISK_PCT.
+#
+# live.py used to size S2 entries from trader.RISK_PCT, which review.py:112
+# machine-rewrites every night from strategy_config.json. review.py:213-215
+# raises it toward 4% whenever `drawdown < 5 and wr > 65 and decided >= 10` --
+# and it computes that win rate from the shared journal, which has contained S2
+# trades since S2 was promoted out of shadow mode. So S2's position size could
+# quadruple off a rule written for the retired S1 engine, with no code change
+# and nothing in the diff to notice.
+#
+# Defined here because _patch_trader's regex set only touches trader.py, which
+# puts this out of the nightly tuner's automatic reach. That is deliberate:
+# risk per trade is the one parameter that scales drawdown one-for-one, and it
+# should move only when a human decides it should.
+S2_RISK_PCT = 0.01
+
 # ── Exit management ───────────────────────────────────────────────────────────
 # On reaching TRAIL_START_R the fixed take-profit is cancelled and replaced by a
 # stop locked at that same level, which then ratchets up every TRAIL_STEP_R.
