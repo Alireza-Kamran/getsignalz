@@ -68,7 +68,39 @@ MIN_STRETCH_ATR = 1.5
 # ── Exit ──────────────────────────────────────────────────────────────────────
 ATR_LEN        = 14
 SL_ATR_MULT    = 1.5     # stop beyond the extreme
-TP_R           = 3.0     # Re-derived on real prices 2026-08-03 (sweep_tp.py),
+TP_R           = 5.0     # RAISED 3.0 -> 5.0 on 2026-08-05, as a direct
+                         # consequence of TRAIL_START_R 1.00 -> 2.50. TP_R was
+                         # picked when the ratchet armed at 0.75R, so the
+                         # backstop sat far beyond it. Arming at 2.5R left it
+                         # only 0.5R away, which is exactly the truncation
+                         # problem the block below was written to avoid --
+                         # re-measured at the new arming level, worst case
+                         # (every TP touch fills before the ratchet cancels it):
+                         #
+                         #   TP_R   n    net      t     maxDD
+                         #   3.0   128  +31.32  1.53   -10.29
+                         #   4.0   126  +38.80  1.82   -10.29
+                         #   5.0   125  +41.87  1.93   -10.29
+                         #   none  125  +41.87  1.93   -10.29
+                         #
+                         # 3.0 was costing ~10.5pp for no risk benefit: max
+                         # drawdown is IDENTICAL at every value, because the
+                         # backstop only ever truncates winners.
+                         #
+                         # 5.0 is not a boundary pick. The curve PLATEAUS there
+                         # -- it is identical to "no TP", meaning no trade in
+                         # the sample reaches beyond it -- so it captures the
+                         # full benefit while still leaving a resting order to
+                         # protect a position if the bot dies mid-trade. That
+                         # is the same reasoning the block below used to reject
+                         # "none", now satisfied at an interior value instead of
+                         # a compromise one.
+                         #
+                         # ---- everything below was measured at TRAIL_START_R
+                         # ---- 0.75 and is kept for the reasoning, not the
+                         # ---- numbers. Do not quote its table.
+                         #
+                         # Re-derived on real prices 2026-08-03 (sweep_tp.py),
                          # replacing the VOID Heikin-Ashi comparison that chose
                          # 1.0 (1.0R "beating" 1.5R on WR 63.6% vs 48.7%, net
                          # +64% vs +43%). Do not quote those figures.
@@ -340,7 +372,56 @@ S2_RISK_PCT = 0.01
 # built and MEASURED as the direct fix for at-market placement, then rejected:
 # it is non-monotonic noise (touch_pess at tsr=0.75 goes +8.74 -> +4.56 -> +3.11
 # -> +1.03 -> +13.09 across gap 0 -> 0.5). See sweep_trail_mode.py.
-TRAIL_START_R = 1.00
+# ── 2026-08-05: 1.00 -> 2.50 ────────────────────────────────────────────────
+# EVERY figure in the block above is VOID. All of it was measured on testnet
+# candles, and indicators.py hardcoded that feed until today: 18.5% of testnet
+# bars repeat the previous close and 17.1% have zero volume, against 0.4% and
+# 0.0% on mainnet. Do not quote any of it.
+#
+# Re-derived on mainnet candles, real fee 0.00045, slippage priced, capped book,
+# 20 coins, ~7 months, pessimistic fill bound:
+#
+#   arm at   n     WR%     net       t     maxDD    ex-top5
+#   0.50    161   69.6   -4.44%   -0.52   -11.11    -6.80
+#   0.75    154   61.7   +1.15%    0.11   -11.39    -2.43
+#   1.00    153   54.2   +1.75%    0.14   -17.59    -3.07   <- was deployed
+#   2.00    140   41.8  +26.46%    1.54   -11.23   +15.53
+#   2.50    132   38.3  +35.76%    1.86   -10.29   +22.35   <- now
+#   3.00    127   30.5  +18.60%    0.91   -16.09    +2.70
+#   4.00    118   18.6  -16.62%   -0.80   -29.93   -36.36
+#   never    45    4.4  -11.02%   -0.44   -37.61   -42.25
+#
+# Two things make this an interior optimum rather than the boundary artefact
+# this project has twice rejected: the curve turns (2.5 beats both 2.0 and 3.0),
+# and "never arm" is firmly negative, so the ratchet itself earns its keep -- it
+# was simply arming far too early and truncating the winners the strategy exists
+# to harvest. Win rate FALLS 54.2% -> 38.3% while net rises 20x; fewer winners,
+# much larger ones.
+#
+# Neighbourhood is smooth, so the region matters and the exact value does not:
+# 2.00 +26.46 / 2.25 +26.82 / 2.50 +35.76 / 2.75 +31.02 / 3.00 +18.60.
+#
+# Passes: n>=100, ex-top5 +22.35%, both OOS halves positive (+0.85 / +33.79),
+# 7/8 months positive (vs 5/8 at 1.00), concurrency caps 2/3/4, alphabetical
+# instead of |stretch| ranking (+31.14%), and every TRAIL_STEP_R value.
+#
+# FAILS TWO STANDING TESTS, recorded rather than glossed:
+#   - pessimistic t = 1.86, below this project's t >= 2.0 bar. The bar was NOT
+#     lowered to accommodate it.
+#   - concurrency cap 1 is -1.58%, so the result depends on running 2 positions.
+#     (The old 1.00 setting also fails cap 1, at -5.66%.)
+#
+# Deployed anyway, and the reasoning matters: 1.00 is not a validated incumbent
+# being displaced by an unvalidated challenger. Both are unvalidated. 1.00 was
+# chosen on data now known to be fabricated AND sits near the worst point of the
+# measured range, so keeping it is not the conservative option -- it is just the
+# status quo. This replaces an unsupported value with a better-supported one. It
+# is NOT a demonstrated edge, and it must be re-judged on live results.
+TRAIL_START_R = 2.50
+
+# Unchanged. Measured invariant at the new arming level: 0.25 / 0.5 / 1.0 all
+# return exactly +35.76%, because most trades now exit at the arming rung and
+# the second rung rarely fires at all.
 TRAIL_STEP_R  = 0.25
 
 

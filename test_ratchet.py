@@ -63,9 +63,15 @@ def check(name, cond, detail=""):
 
 def main():
     # Derived from the live constants rather than hard-coded, so a future change
-    # to the ratchet retunes the test instead of breaking it. Only the arming
-    # threshold is parametrised; the rung-arithmetic cases below are pinned to
-    # explicit numbers on purpose, since that is the arithmetic being checked.
+    # to the ratchet retunes the test instead of breaking it.
+    #
+    # This used to say the rung-arithmetic cases below were "pinned to explicit
+    # numbers on purpose, since that is the arithmetic being checked". That was
+    # wrong, and TRAIL_START_R 1.00 -> 2.50 on 2026-08-05 broke five of them: the
+    # arithmetic under test is "0.6R past the threshold buys two 0.25R rungs",
+    # which holds at ANY threshold. Pinning the price to 1.6R silently encoded
+    # TRAIL_START_R == 1.0 -- the same failure case 2b was already fixed for.
+    # Everything below is now expressed as an offset from `start`.
     start, step = strategy2.TRAIL_START_R, strategy2.TRAIL_STEP_R
     assert step == 0.25, "rung cases below encode a 0.25R step"
     ok = True
@@ -95,33 +101,38 @@ def main():
                 runner["sl"] > 100.0 and start <= runner["locked_r"] <= peak,
                 "sl=%.4f locked=%s" % (runner["sl"], runner["locked_r"]))
 
-    # 3. Rung arithmetic: 1.6R -> int(0.6/0.25)=2 rungs -> locked 1.5R.
-    f, t = _run(101.6, _trade())
-    ok &= check("1.6R locks 1.5R", t["locked_r"] == 1.5, "got %s" % t["locked_r"])
+    # 3. Rung arithmetic: 0.6R past the threshold -> int(0.6/0.25)=2 rungs.
+    two_rungs = start + 0.5
+    f, t = _run(100.0 + start + 0.6, _trade())
+    ok &= check("%.2fR locks %.2fR" % (start + 0.6, two_rungs),
+                abs(t["locked_r"] - two_rungs) < 1e-9, "got %s" % t["locked_r"])
 
-    # 4. Short side mirrors: entry 100, R 1, price 98.4 = 1.6R -> stop 98.5.
-    f, t = _run(98.4, _trade(d=-1))
-    ok &= check("short 1.6R locks 1.5R",
-                t["locked_r"] == 1.5 and abs(t["sl"] - 98.5) < 1e-9)
+    # 4. Short side mirrors it exactly.
+    f, t = _run(100.0 - (start + 0.6), _trade(d=-1))
+    ok &= check("short %.2fR locks %.2fR" % (start + 0.6, two_rungs),
+                abs(t["locked_r"] - two_rungs) < 1e-9
+                and abs(t["sl"] - (100.0 - two_rungs)) < 1e-9)
 
-    # 5. The stop must never retreat. Arm at 2R, then poll a pullback to 1.2R.
+    # 5. The stop must never retreat: arm high, then poll a pullback.
     armed = _trade()
-    _run(102.0, armed)
-    f, t = _run(101.2, armed)
-    ok &= check("stop never retreats", not f.calls and abs(t["sl"] - 102.0) < 1e-9)
+    _run(100.0 + start + 1.0, armed)
+    f, t = _run(100.0 + start + 0.2, armed)
+    ok &= check("stop never retreats",
+                not f.calls and abs(t["sl"] - (100.0 + start + 1.0)) < 1e-9)
 
     # 6. On a placement failure the recorded stop must NOT advance, so the next
     #    poll retries -- update_sl has already cancelled the TP and the old stop
     #    by then, so believing a failed move succeeded leaves it naked forever.
-    f, t = _run(101.6, _trade(), fail_times=1)
+    f, t = _run(100.0 + start + 0.6, _trade(), fail_times=1)
     ok &= check("failure leaves sl unmoved", t["sl"] == 99.0 and t["locked_r"] == 0.0)
     ok &= check("failure flags for alert", t.get("naked_alerted") is True)
 
     # 7. And the retry actually re-protects it.
     tr = _trade()
-    _run(101.6, tr, fail_times=1)
-    f, t = _run(101.6, tr)
-    ok &= check("retry re-protects", len(f.calls) == 1 and t["locked_r"] == 1.5
+    _run(100.0 + start + 0.6, tr, fail_times=1)
+    f, t = _run(100.0 + start + 0.6, tr)
+    ok &= check("retry re-protects",
+                len(f.calls) == 1 and abs(tr["locked_r"] - two_rungs) < 1e-9
                 and "naked_alerted" not in t)
 
     live._open_trades.clear()
