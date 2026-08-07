@@ -353,9 +353,12 @@ def summarize(trades):
 
     lines = [f"Total simulated trades: {len(df)}", ""]
 
+    # WR by realised P&L sign, not which order fired -- result=="tp" mislabels
+    # every winning trail exit as a loss (same bug already fixed in this file's
+    # own _ablation_stats(), missed here since this is a separate entry point).
     lines.append(f"── BY SCORE (MIN_SCORE={MIN_SCORE}, TP_RATIO={TP_RATIO}) ──")
     for score, g in sorted(df.groupby("score"), key=lambda x: x[0]):
-        wr = (g["result"] == "tp").mean() * 100
+        wr = (g["r_pct"] > 0).mean() * 100
         lines.append(f"  Score {score}: n={len(g):<4} WR={wr:5.1f}%  avg={g['r_pct'].mean():+6.1f}%")
 
     lines.append(f"\n── BY COIN (score >= {MIN_SCORE} only) ──")
@@ -364,7 +367,7 @@ def summarize(trades):
         lines.append("  (no qualifying trades at current MIN_SCORE)")
     else:
         for coin, g in sorted(qual.groupby("coin"), key=lambda x: -x[1]["r_pct"].mean()):
-            wr = (g["result"] == "tp").mean() * 100
+            wr = (g["r_pct"] > 0).mean() * 100
             lines.append(f"  {coin:<6} n={len(g):<4} WR={wr:5.1f}%  avg={g['r_pct'].mean():+6.1f}%")
 
     return "\n".join(lines)

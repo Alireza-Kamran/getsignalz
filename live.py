@@ -218,7 +218,7 @@ def _check_trail_s2(positions, mids=None):
                     f"🚨 <b>[S2] {coin}</b>\n"
                     f"جابجایی استاپ ناموفق بود\n"
                     f"پوزیشن تا تلاش بعدی بدون استاپ است\n"
-                    f"<code>{str(e)[:120]}</code>"
+                    f"<code>{tg.esc(str(e)[:120])}</code>"
                 )
             continue
 

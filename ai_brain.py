@@ -7,6 +7,7 @@ signal scoring, trade history, logs. It proposes concrete, syntax-validated
 code edits. Changes are applied automatically; bot restarts if safe to do so.
 """
 import os
+import html
 import json
 import py_compile
 import subprocess
@@ -297,7 +298,11 @@ def format_dm(result: dict) -> str:
     ]
 
     if result.get("error"):
-        lines.append(f"⚠️ Error: <code>{result['error'][:400]}</code>")
+        # result["error"] can carry raw subprocess stderr/stdout or a full
+        # traceback (see the four assignment sites in this file) -- almost
+        # guaranteed to contain '<' (e.g. "in <module>"), which breaks
+        # Telegram's HTML parser inside this <code> block if not escaped.
+        lines.append(f"⚠️ Error: <code>{html.escape(str(result['error'])[:400])}</code>")
         return "\n".join(lines)
 
     if result.get("analysis"):

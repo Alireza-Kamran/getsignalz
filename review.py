@@ -66,9 +66,13 @@ def nightly_review():
         wr_e   = "🟢" if s["win_rate"] >= 50 else "🔴"
         tot_e  = "💹" if s["total_lev_pct"] > 0 else "💀"
         def _emoji(t):
-            r, p = t.get("result"), t.get("lev_pct") or 0
-            if r == "tp" and p > 0: return "✅"
-            if r == "sl" and p < 0: return "❌"
+            # Classify on realised P&L, not which order fired -- a S2 trail-stop
+            # winner carries result=="sl" and used to fall through to a neutral
+            # 🔘 here instead of ✅ (same bug class as the ADX/coin/hour counters
+            # below, fixed the same night).
+            p = t.get("lev_pct") or 0
+            if p > 0: return "✅"
+            if p < 0: return "❌"
             return "🔘"
 
         detail = "".join(
@@ -177,7 +181,10 @@ def _self_improve():
         cur_adx = config.get("min_adx", 30)
         low_adx  = [t for t in all_trades
                     if (sig := _match_signal(t, signals)) and (sig.get("adx") or 0) < cur_adx]
-        low_wins = [t for t in low_adx if t["result"] == "tp" and t["lev_pct"] > 0]
+        # Classify on realised P&L, not which order fired -- result=="tp" mislabels
+        # every S2 trail-stop winner as a loss (same bug class fixed in
+        # analyze.full_report / result_card / tg.dm_trade_close, all 2026-08-04).
+        low_wins = [t for t in low_adx if t["lev_pct"] > 0]
         low_wr   = len(low_wins) / len(low_adx) * 100 if low_adx else 100
 
         # MIN_ADX auto-adjust DISABLED 2026-07-10 — FOURTH blended-metric regression
@@ -242,7 +249,7 @@ def _self_improve():
         for t in all_trades:
             c = t["coin"]
             coin_perf[c]["n"] += 1
-            coin_perf[c]["w"] += 1 if (t["result"]=="tp" and t["lev_pct"]>0) else 0
+            coin_perf[c]["w"] += 1 if t["lev_pct"] > 0 else 0
             coin_perf[c]["pct"] += t.get("lev_pct", 0) or 0
 
         cur_list  = list(config.get("watchlist", []))
@@ -278,7 +285,7 @@ def _self_improve():
             h   = sig.get("session_hour") if sig else None
             if h is not None:
                 hour_perf[h]["n"] += 1
-                if t["result"] == "tp" and t["lev_pct"] > 0:
+                if t["lev_pct"] > 0:
                     hour_perf[h]["w"] += 1
 
         cur_start = config.get("session_start_utc", 7)
@@ -372,7 +379,7 @@ def _self_improve():
                 changes += [f"[AI] {c['file']}: {c['reason']}" for c in code_edits]
         except Exception as brain_err:
             import traceback
-            tg.dm_owner(f"⚠️ Claude brain error: {brain_err}\n<code>{traceback.format_exc()[:400]}</code>")
+            tg.dm_owner(f"⚠️ Claude brain error: {tg.esc(brain_err)}\n<code>{tg.esc(traceback.format_exc()[:400])}</code>")
 
         # ── Version bump + GitHub push ────────────────────────────────────────
         try:
@@ -407,7 +414,7 @@ def _self_improve():
 
     except Exception as e:
         import traceback
-        tg.dm_owner(f"⚠️ Self-improve error: {e}\n<code>{traceback.format_exc()[:600]}</code>")
+        tg.dm_owner(f"⚠️ Self-improve error: {tg.esc(e)}\n<code>{tg.esc(traceback.format_exc()[:600])}</code>")
 
 
 def weekly_review():
@@ -574,10 +581,10 @@ def version_push():
                 f"{len(ai_changes)} code improvement{'s' if len(ai_changes)!=1 else ''}"
             )
         else:
-            tg.dm_owner(f"⚠️ Git push failed: <code>{push.stderr[:300]}</code>")
+            tg.dm_owner(f"⚠️ Git push failed: <code>{tg.esc(push.stderr[:300])}</code>")
 
         os.remove(REPORT)
 
     except Exception as e:
         import traceback
-        tg.dm_owner(f"⚠️ version_push error: {e}\n<code>{traceback.format_exc()[:400]}</code>")
+        tg.dm_owner(f"⚠️ version_push error: {tg.esc(e)}\n<code>{tg.esc(traceback.format_exc()[:400])}</code>")

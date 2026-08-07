@@ -2,11 +2,21 @@
 Telegram channel integration.
 ALL percentages shown are LEVERAGED — never raw price movement.
 """
-import requests, os, time
+import requests, os, re, time, html
 from datetime import datetime
 
 from config import TELEGRAM_TOKEN as TOKEN, TELEGRAM_CHANNEL as CHANNEL, TELEGRAM_OWNER_ID as OWNER_ID
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
+
+
+def esc(text) -> str:
+    """Escape free-form text (tracebacks, exception strings, exchange error
+    bodies) before it goes inside a <code>/<b> block in a parse_mode=HTML
+    message. traceback.format_exc() almost always contains '<module>' --
+    without this, an error report can itself be rejected by Telegram's HTML
+    parser ('can't parse entities'), exactly the failure mode error-reporting
+    exists to avoid. Never call on text that already contains real tags."""
+    return html.escape(str(text))
 
 
 # ── Channel-outage escalation ────────────────────────────────────────────────
@@ -52,7 +62,7 @@ def note_channel_failure(desc, where=""):
         "تلگرام ارسال به این کانال را رد می کند:\n"
         f"<code>{CHANNEL}</code>\n\n"
         "پیام خطا:\n"
-        f"<code>{str(desc)[:120]}</code>\n\n"
+        f"<code>{esc(str(desc)[:120])}</code>\n\n"
         "سیگنال و کارت نتیجه و داشبورد ارسال نمی شود.\n"
         "ربات به معامله ادامه می دهد.\n\n"
         "لطفا نام کانال و عضویت ربات را بررسی کنید."
@@ -97,11 +107,18 @@ def edit(msg_id, text: str):
     if not msg_id:
         return
     try:
-        requests.post(f"{BASE_URL}/editMessageText", json={
+        r = requests.post(f"{BASE_URL}/editMessageText", json={
             "chat_id": CHANNEL, "message_id": msg_id,
             "text": text, "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }, timeout=10)
+        d = r.json()
+        if not d.get("ok"):
+            # Same silent-rejection class fixed in send()/dm_owner() on 2026-08-04
+            # -- this call ignored the response body entirely, so a rejected edit
+            # (e.g. "message not modified", or a channel outage) left no trace.
+            if not note_channel_failure(d.get("description"), "edit"):
+                print(f"[TG] edit rejected: {d.get('description')}")
     except Exception as e:
         print(f"[TG] edit failed: {e}")
 
@@ -241,8 +258,23 @@ def dm_trade_close(coin, direction, entry, exit_px, lev_pct, hit,
                    balance_before, balance_after, stats, max_adverse_pct=None, size=0,
                    max_drawdown_pct=None, peak_roe_pct=None):
     side    = "LONG 🟢" if direction == 1 else "SHORT 🔴"
-    won     = hit == "tp"
+    # Classify on realised P&L, never on which ORDER closed the trade. Same bug
+    # class already fixed in analyze.full_report and result_card/_live_text
+    # (both 2026-08-04): S2's ratchet cancels the take-profit at TRAIL_START_R,
+    # so every S2 exit -- winners included -- fires the stop and arrives here
+    # as hit="sl". `won = hit == "tp"` could therefore never be true for S2,
+    # and this owner DM captioned AVAX +15.7%, ETH +17.4% and BTC +13.3% all
+    # "SL HIT 🛑 / 💀" -- this call site was missed both previous times.
+    won     = lev_pct > 0
     emoji   = "✅" if won else "❌"
+    if hit == "tp":
+        status_txt = "TP HIT 🎯"
+    elif lev_pct > 0:
+        status_txt = "TRAIL EXIT 📈"
+    elif lev_pct == 0:
+        status_txt = "BREAKEVEN ⚪️"
+    else:
+        status_txt = "STOP HIT 🛑"
     pct_s   = f"+{lev_pct:.1f}%" if lev_pct >= 0 else f"{lev_pct:.1f}%"
     # Dollar PnL from the trade itself (not balance diff, which can be skewed by other positions)
     raw_usd = (exit_px - entry) * direction * abs(size)
@@ -259,7 +291,7 @@ def dm_trade_close(coin, direction, entry, exit_px, lev_pct, hit,
         f"{emoji} <b>CLOSED — {coin} {side}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{'💹' if won else '💀'} Result:  <b>{pct_s}</b>{usd_s}\n"
-        f"{'TP HIT 🎯' if won else 'SL HIT 🛑'}\n"
+        f"{status_txt}\n"
         f"{adv_s}"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Balance:  <b>${balance_after:.2f}</b>\n"
@@ -272,5 +304,55 @@ def dm_trade_close(coin, direction, entry, exit_px, lev_pct, hit,
     )
 
 
-def send_error(msg_text):
-    send(f"⚠️ <b>Bot Error</b>\n<code>{msg_text}</code>")
+# ── Operational error reporting ──────────────────────────────────────────────
+# These go to the OWNER, never to the channel, and are deduplicated.
+#
+# send_error used to call send(), i.e. post to the public channel, and live.py
+# calls it from the main loop's catch-all. A transient upstream 502 -- which the
+# bot already retries and recovers from without missing a trade -- therefore
+# published a raw nginx HTML error page to subscribers. 58 of them went out
+# between 2026-08-05 and 08-07. The channel is the product; it should carry
+# signals and results, not the exception stream of the process producing them.
+#
+# Transient upstream failures are also not worth waking the owner for one at a
+# time. They are counted and reported once per cooldown with an occurrence
+# count, so a passing blip stays quiet while a sustained outage still escalates.
+_TRANSIENT_MARKERS = (
+    "502", "503", "504", "bad gateway", "service unavailable", "gateway time",
+    "timed out", "timeout", "connection reset", "connection aborted",
+    "temporarily unavailable", "max retries exceeded", "remote end closed",
+)
+_ERROR_COOLDOWN_S = 1800
+_error_state = {}          # signature -> {"at": epoch, "n": count since last DM}
+
+
+def _signature(text):
+    """Collapse an error to a comparable shape: digits and quoted bodies vary
+    between occurrences of what is really the same fault."""
+    t = re.sub(r"\d+", "#", str(text))
+    t = re.sub(r"\s+", " ", t)
+    return t[:160]
+
+
+def send_error(msg_text, force=False):
+    """Report an operational error to the owner, deduplicated.
+
+    force=True bypasses the cooldown for genuinely one-off, high-signal events.
+    """
+    text = str(msg_text)
+    sig  = _signature(text)
+    now  = time.time()
+    st   = _error_state.setdefault(sig, {"at": 0.0, "n": 0})
+    st["n"] += 1
+
+    transient = any(m in text.lower() for m in _TRANSIENT_MARKERS)
+    if not force and now - st["at"] < _ERROR_COOLDOWN_S:
+        return                      # already reported recently; just keep counting
+
+    repeats = st["n"]
+    st.update(at=now, n=0)
+
+    # An upstream gateway error says nothing useful in its HTML body.
+    body = "upstream gateway error" if transient else text[:600]
+    extra = f"\n<i>x{repeats} in the last {_ERROR_COOLDOWN_S // 60} min</i>" if repeats > 1 else ""
+    dm_owner(f"⚠️ <b>Bot error</b>\n<code>{esc(body)}</code>{extra}")
