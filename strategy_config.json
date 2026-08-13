@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-08-07",
+  "last_updated": "2026-08-13",
   "updated_by": "auto-nightly",
   "min_score": 7,
   "max_trades": 1,
@@ -34,7 +34,7 @@
     "timeframe_1h": 1,
     "timeframe_15m": 0
   },
-  "notes": "S1 remains disabled (engine=strategy2.py); no S1 evidence gathered tonight, no S1 parameter changed. Session was a clean audit: grep -rn result==\"tp\" across the whole repo (the standing check from 08-06) came back clean -- the 08-06 fixes (tg.dm_trade_close, review.py _self_improve, backtest.py summarize, tg.edit) are the only remaining call sites and are all correctly classifying on lev_pct sign now, no regression. bot.log: zero ERROR/WARNING/Exception lines, continuous candle scanning 02:00-01:00 UTC, channel healthy (zero CHANNEL UNREACHABLE). trader.py MIN_SCORE=7 and 12-coin WATCHLIST confirmed in sync with this file (no drift). Live n=6 (was 5): new trade INJ LONG opened 08-06 04:01 UTC, closed 09:21 UTC at -14.2%/-1.08R, a straight stop that never approached TRAIL_START_R=2.5 -- adds zero live evidence on the still-untested 2.5R ratchet-arming threshold (0 of 6 live trades have armed it; the 3 pre-08-05 winners armed under the old <=1.00R regime and are not comparable). OWNER-LOCKED constants in strategy2.py untouched, as required.",
+  "notes": "S1 disabled (engine=strategy2.py). 2026-08-13 session: MILESTONE \u2014 first ratchet arm under TRAIL_START_R=2.5 regime confirmed. AVAX LONG (entry=6.2028, opened 08-11 16:01) reached +3R on 08-12 12:29 (peak_roe=42%), stop advanced to $6.4937 (+3R), closed SL at $6.4580 = +2.632R. At-market slippage: 0.37R vs 3R target (12.3% of locked gain \u2014 within expected sweep_trail_mode bounds). FIL LONG opened 08-12 22:01 (RSI=22.6, ADX=22.2, stretch=-4.23), closed SL 23:33 at -1.19R (1.5h). OP LONG opened 08-13 00:01 (RSI=23.1, ADX=23.9) \u2014 currently open. n=9 closed: WR=44.4% (4W/5L), sumR=+0.17, EV=+0.018R/trade. portfolio2: t=3.04 (UP from 2.69), WR=60.4%, EV=+0.449%, n=91 \u2014 strategy health improving. OOS t=2.45. BTC LONG (entry=63550.4, 08-11 20:01) still open, not in state.json tracked \u2014 flag for Kamran review. AVAX winner 8R (in n=8) changed EV from -0.18R to +0.018R. result==\"tp\" standing check CLEAN. No .py changes tonight.",
   "suspended_coins": {},
   "engine": "S1_DISABLED \u2014 live engine is strategy2.py (mean reversion). Every parameter in this file (min_score, min_adx, trail_pct, tp_ratio, session_*, watchlist, signal_weights) belongs to the RETIRED liquidity-pool engine and has NO effect while S1_ENABLED=False in live.py. S2's parameters live in strategy2.py."
 }

@@ -26,14 +26,25 @@ from indicators import (fetch_candles, rsi, adx, order_blocks, fvg,
 
 # ── Coins to monitor ──────────────────────────────────────────────────────────
 WATCHLIST = [
-    "ETH", "WLD", "ARB", "SUI", "SOL", "INJ", "AAVE", "AVAX", "ATOM", "OP", "APT", "DOGE"
+    "ETH",
+    "WLD",
+    "ARB",
+    "SUI",
+    "SOL",
+    "INJ",
+    "AAVE",
+    "AVAX",
+    "ATOM",
+    "OP",
+    "APT",
+    "DOGE"
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────
 MIN_SCORE   = 7         # minimum confluence (max 8) -- initial value, tuned nightly like every prior regime
-TP_RATIO      = 2.0       # 1:2 RR minimum -- Kamran's stated floor
-RISK_PCT      = 0.01
-MAX_TRADES    = 1
+TP_RATIO    = 2.0       # 1:2 RR minimum -- Kamran's stated floor
+RISK_PCT    = 0.01
+MAX_TRADES  = 1
 MAX_LEV_LOSS  = 20.0      # Kamran's stated max stop. Tighter than executor.py's independent
                           # 25% outer safety clamp (untouched, unrelated defense-in-depth --
                           # protects against ANY strategy bug, not specific to this one).

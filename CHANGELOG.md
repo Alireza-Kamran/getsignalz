@@ -251,6 +251,16 @@ the sizing working correctly.
 
 ---
 
+## v1.27.0 — 2026-08-13
+
+**Stats:** 11 trades · WR: 36% · P&L: -51.1%
+
+**Code improvements (2):**
+- tracker.py: Adds a backward-compatible locked_r parameter so S2 can persist both the new SL and the exact locked-R amount in one call. All existing S1 call sites pass nothing and are unaffected. Without this, state.json never received the ratcheted SL, so the dashboard always showed the original stop as the live protection level.
+- live.py: Wires S2 ratchet fires into tracker.update_trail — the call S1 already makes but S2 was missing. This persists the ratcheted SL and locked_r to state.json immediately on every successful update_sl(), fixing: (1) the live Telegram message showing the wrong stop price and no lock indicator, (2) the dashboard lock badge never appearing for S2 positions, and (3) bot restarts restoring _open_trades from the stale pre-ratchet SL rather than the actual ratcheted level.
+
+---
+
 ## v1.2.7 -- 2026-06-19
 
 **Stats:** 33 trades, WR: 32%, P&L: +339.7%

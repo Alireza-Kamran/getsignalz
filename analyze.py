@@ -210,18 +210,32 @@ _HEALTH_TTL_S = 900  # 15 min
 
 
 def _edge_confidence(journal, config):
-    """Pillar 1 (40 pts): sample size + sign of EV in the core edge band (score >= MIN_SCORE)."""
+    """Pillar 1 (40 pts): sample size + sign of EV in the core edge band (score >= MIN_SCORE).
+
+    S2 (mean-reversion engine) logs every signal with score=0 because it has
+    no scoring system — the entry gate is purely RSI/ADX/stretch. Filtering
+    score >= 7 excluded every S2 trade, making Edge Confidence stuck at 0/40
+    even with a fully live strategy. When S2 is the engine, treat any trade
+    that has a corresponding fired signal as qualifying.
+    """
     min_score = config.get("min_score", 7)
     trades = [t for t in journal.get("trades", []) if t.get("result")]
     signals = journal.get("signals", [])
+
+    # S2 engine: identified by the disabled-S1 marker in the config's engine field.
+    s2_engine = "S1_DISABLED" in config.get("engine", "")
 
     qualifying = []
     for t in trades:
         sig = next((s for s in signals
                     if s["coin"] == t["coin"] and s["time"][:10] == t["open_time"][:10]), None)
-        score = sig["score"] if sig else 0
-        if score >= min_score:
-            qualifying.append(t)
+        if s2_engine:
+            if sig and sig.get("fired"):
+                qualifying.append(t)
+        else:
+            score = sig["score"] if sig else 0
+            if score >= min_score:
+                qualifying.append(t)
 
     n = len(qualifying)
     avg_pct = sum(t.get("lev_pct", 0) or 0 for t in qualifying) / n if n else 0.0

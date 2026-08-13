@@ -226,6 +226,7 @@ def _check_trail_s2(positions, mids=None):
 
         t["sl"] = new_sl
         t["locked_r"] = locked
+        tracker.update_trail(coin, new_sl, 0, locked_r=locked)
         logger.info(f"[S2] {coin} stop -> +{locked:g}R  ${new_sl:.5g}")
         tg.dm_owner(
             f"🔒 <b>[S2] {coin}</b>\n"
@@ -500,62 +501,94 @@ def run():
 
     tracker.start()
 
-    # Restore open trades from persistent tracker state on restart
-    try:
-        saved        = tracker.load_state().get("tracked", {})
-        live         = get_positions()
-        current_bal  = get_account_value()   # real balance NOW (best proxy for balance_before)
-        for coin, t in saved.items():
-            if coin in live:
-                hl = live[coin]  # authoritative HL position data
-                _open_trades[coin] = {
-                    "dir":          hl["direction"],
-                    "entry":        hl["entry"],        # HL blended entry (correct)
-                    "sl":           t["sl"],            # our tracked SL order price
-                    "tp":           t["tp"],            # our tracked TP order price
-                    "size":         abs(hl["size"]),    # HL actual size
-                    "leverage":     hl["leverage"],     # HL actual leverage
-                    "opened_at":    datetime.fromisoformat(t["opened_at"]),
-                    "trail_stage":  t.get("trail_stage", 0),
-                    "signal_num":   t["signal_num"],
-                    "balance_before": t.get("balance_before", current_bal),
-                    "max_adverse_pct": t.get("max_adverse_pct", 0.0),
-                }
-                # Keep state.json in sync with HL actuals
-                t["entry"]    = hl["entry"]
-                t["size"]     = abs(hl["size"])
-                t["leverage"] = hl["leverage"]
-        if _open_trades:
-            logger.info(f"Restored {len(_open_trades)} open trades from state: {list(_open_trades.keys())}")
-            # Persist HL-synced values back to state.json
-            synced = tracker.load_state()
-            for coin, t in synced.get("tracked", {}).items():
-                if coin in _open_trades:
-                    t["entry"]    = _open_trades[coin]["entry"]
-                    t["size"]     = _open_trades[coin]["size"]
-                    t["leverage"] = _open_trades[coin]["leverage"]
-            tracker.save_state(synced)
+    # Restore open trades from persistent tracker state on restart.
+    #
+    # get_positions()/get_account_value() already retry internally (_hl_call,
+    # ~15s of backoff) but that's not enough against a real HL outage: on
+    # 2026-08-07 the testnet API 502'd continuously for ~6 minutes (08:12-
+    # 08:18 UTC). A restart landing inside a window like that used to fail
+    # this whole block once and give up -- if `saved` names a real open
+    # position, _open_trades then stays permanently empty for the rest of
+    # this process's life (nothing else ever re-populates it), silently
+    # orphaning that position from the bot's own trailing/exit management
+    # until it closes on its own. Only the resting exchange SL protects it
+    # meanwhile. Retrying here across a few cycles' worth of time covers the
+    # outages actually observed; a loud DM (instead of a log line only) on
+    # final failure covers the rest, matching every other silent-failure fix
+    # this project has made (self-learn cron, channel outage, dm_owner length).
+    saved = tracker.load_state().get("tracked", {})
+    live = current_bal = None
+    for attempt in range(3):
+        try:
+            live        = get_positions()
+            current_bal = get_account_value()
+            break
+        except Exception as e:
+            if attempt < 2:
+                logger.warning(f"Trade-restore fetch failed ({e}) — retry in 10s")
+                time.sleep(10)
+    if live is None:
+        logger.warning("Could not restore trades: HL API unavailable after retries")
+        if saved:
+            tg.dm_owner(
+                f"⚠️ Could not restore {len(saved)} tracked position(s) "
+                f"({', '.join(saved)}) on startup — HL API unavailable after "
+                f"retries. The exchange-side stop still protects them, but the "
+                f"bot's own trailing/exit logic will not manage them until a "
+                f"restart succeeds. Check manually.")
+    else:
+        try:
+            for coin, t in saved.items():
+                if coin in live:
+                    hl = live[coin]  # authoritative HL position data
+                    _open_trades[coin] = {
+                        "dir":          hl["direction"],
+                        "entry":        hl["entry"],        # HL blended entry (correct)
+                        "sl":           t["sl"],            # our tracked SL order price
+                        "tp":           t["tp"],            # our tracked TP order price
+                        "size":         abs(hl["size"]),    # HL actual size
+                        "leverage":     hl["leverage"],     # HL actual leverage
+                        "opened_at":    datetime.fromisoformat(t["opened_at"]),
+                        "trail_stage":  t.get("trail_stage", 0),
+                        "signal_num":   t["signal_num"],
+                        "balance_before": t.get("balance_before", current_bal),
+                        "max_adverse_pct": t.get("max_adverse_pct", 0.0),
+                    }
+                    # Keep state.json in sync with HL actuals
+                    t["entry"]    = hl["entry"]
+                    t["size"]     = abs(hl["size"])
+                    t["leverage"] = hl["leverage"]
+            if _open_trades:
+                logger.info(f"Restored {len(_open_trades)} open trades from state: {list(_open_trades.keys())}")
+                # Persist HL-synced values back to state.json
+                synced = tracker.load_state()
+                for coin, t in synced.get("tracked", {}).items():
+                    if coin in _open_trades:
+                        t["entry"]    = _open_trades[coin]["entry"]
+                        t["size"]     = _open_trades[coin]["size"]
+                        t["leverage"] = _open_trades[coin]["leverage"]
+                tracker.save_state(synced)
 
-        # Detect positions that closed while bot was down
-        for coin, t in saved.items():
-            if coin not in live and coin not in _open_trades:
-                try:
-                    exit_px   = get_price(coin)
-                    direction = t["dir"]
-                    entry_px  = t["entry"]
-                    tp_px     = t["tp"]
-                    lev       = t.get("leverage", 1.0)
-                    sign      = 1 if (direction == 1 and exit_px > entry_px) or (direction == -1 and exit_px < entry_px) else -1
-                    lev_pct   = abs(exit_px - entry_px) / entry_px * 100 * lev * sign
-                    hit       = "tp" if (direction == -1 and exit_px <= tp_px) or (direction == 1 and exit_px >= tp_px) else "sl"
-                    logger.warning(f"Ghost close: {coin} closed while offline → {hit.upper()} ~${exit_px:.4f} ({lev_pct:+.1f}%)")
-                    log_trade_close(coin, exit_px, hit, lev_pct, 0)
-                    tracker.close_position(coin, exit_px, hit, lev_pct)
-                    tg.dm_owner(f"⚠️ Ghost close: {coin} was closed while bot was offline. Approx exit ${exit_px:.4f}, classified as {hit.upper()} ({lev_pct:+.1f}%). Verify manually.")
-                except Exception as ge:
-                    logger.warning(f"Ghost close detection failed for {coin}: {ge}")
-    except Exception as e:
-        logger.warning(f"Could not restore trades: {e}")
+            # Detect positions that closed while bot was down
+            for coin, t in saved.items():
+                if coin not in live and coin not in _open_trades:
+                    try:
+                        exit_px   = get_price(coin)
+                        direction = t["dir"]
+                        entry_px  = t["entry"]
+                        tp_px     = t["tp"]
+                        lev       = t.get("leverage", 1.0)
+                        sign      = 1 if (direction == 1 and exit_px > entry_px) or (direction == -1 and exit_px < entry_px) else -1
+                        lev_pct   = abs(exit_px - entry_px) / entry_px * 100 * lev * sign
+                        hit       = "tp" if (direction == -1 and exit_px <= tp_px) or (direction == 1 and exit_px >= tp_px) else "sl"
+                        logger.warning(f"Ghost close: {coin} closed while offline → {hit.upper()} ~${exit_px:.4f} ({lev_pct:+.1f}%)")
+                        log_trade_close(coin, exit_px, hit, lev_pct, 0)
+                        tracker.close_position(coin, exit_px, hit, lev_pct)
+                        tg.dm_owner(f"⚠️ Ghost close: {coin} was closed while bot was offline. Approx exit ${exit_px:.4f}, classified as {hit.upper()} ({lev_pct:+.1f}%). Verify manually.")
+                    except Exception as ge:
+                        logger.warning(f"Ghost close detection failed for {coin}: {ge}")
+        except Exception as e:
+            logger.warning(f"Could not restore trades: {e}")
 
     try:
         _cd = tracker.load_state().get("cooldowns", {})

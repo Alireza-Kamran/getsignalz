@@ -732,18 +732,23 @@ def register_position(coin, direction, entry, sl, tp, size, leverage, signal_num
     return t["msg_id"]
 
 
-def update_trail(coin, new_sl, trail_stage):
+def update_trail(coin, new_sl, trail_stage, locked_r=None):
     """Persist updated SL and trail_stage to state after a trail fires.
 
     trail_stage is the rung index from live.py's progressive ladder (rung n
     locks (n-1) * TRAIL_R_STEP), so the label is derived rather than hardcoded
     -- the old "1 = breakeven, anything else = +0.5R" form mislabelled every
-    rung above 2 once the ladder became unbounded on 2026-07-26."""
+    rung above 2 once the ladder became unbounded on 2026-07-26.
+    locked_r: when provided (S2 path), overrides the stage-derived locked amount
+    and is written to state.json so the dashboard lock indicator and the
+    ratcheted SL both survive a bot restart."""
     state = load_state()
     if coin in state.get("tracked", {}):
         state["tracked"][coin]["sl"]          = new_sl
         state["tracked"][coin]["trail_stage"] = trail_stage
-        locked = (trail_stage - 1) * TRAIL_R_STEP
+        if locked_r is not None:
+            state["tracked"][coin]["locked_r"] = locked_r
+        locked = locked_r if locked_r is not None else (trail_stage - 1) * TRAIL_R_STEP
         label  = "breakeven" if locked <= 0 else f"+{locked:g}R"
         acts  = state["tracked"][coin].setdefault("activity", [])
         acts.append(f"🔒 Trail {label} → SL ${new_sl:.5g}")
