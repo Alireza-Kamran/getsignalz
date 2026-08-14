@@ -251,6 +251,15 @@ the sizing working correctly.
 
 ---
 
+## v1.28.0 — 2026-08-14
+
+**Stats:** 11 trades · WR: 36% · P&L: -51.1%
+
+**Code improvements (1):**
+- live.py: _check_trail_s2 has two sequential guards that both fail on a restored position: (1) t.get('strategy') != 'S2' short-circuits to skip when strategy is absent from the dict, and (2) t.get('R') or 0 returns 0 because R is never persisted to state.json (it lives only in memory). Both guards must pass for the ratchet to run. strategy and sl_orig are already saved to state.json by register_position so t.get() recovers them correctly; R must be recomputed as abs(entry - sl_orig) since it was never stored. locked_r is also saved by update_trail whenever a ratchet step fires, so it restores cleanly with a 0.0 default for pre-ratchet positions. Without this fix, every S2 trade that survives a nightly auto-restart loses its ratchet management silently for the rest of its life.
+
+---
+
 ## v1.27.0 — 2026-08-13
 
 **Stats:** 11 trades · WR: 36% · P&L: -51.1%

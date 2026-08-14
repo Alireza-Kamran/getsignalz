@@ -553,6 +553,10 @@ def run():
                         "signal_num":   t["signal_num"],
                         "balance_before": t.get("balance_before", current_bal),
                         "max_adverse_pct": t.get("max_adverse_pct", 0.0),
+                        "strategy":     t.get("strategy", "S1"),
+                        "sl_orig":      t.get("sl_orig", t["sl"]),
+                        "locked_r":     t.get("locked_r", 0.0),
+                        "R":            abs(hl["entry"] - (t.get("sl_orig") or t["sl"])),
                     }
                     # Keep state.json in sync with HL actuals
                     t["entry"]    = hl["entry"]
