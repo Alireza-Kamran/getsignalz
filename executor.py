@@ -197,6 +197,43 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
     # Cap at account*leverage*0.5 preserves the old value as a hard maximum.
     account_val = get_account_value()
     risk_pct_sl = abs(price - sl_price) / price
+
+    # Re-validate the stop distance at EXECUTION price, not just at signal price.
+    #
+    # strategy2.signal already rejects stops tighter than MIN_SL_PCT, but it
+    # measures against the price at signal time. The stop is then frozen while
+    # the market keeps moving, so by the time the order goes in the distance can
+    # be a fraction of what was validated -- and size is 1/distance, so it
+    # explodes in exactly that case.
+    #
+    # FIL, 2026-08-12 22:01: signalled at 0.67396 with the stop at 0.66609
+    # (1.168% away, comfortably valid). By execution get_price() returned
+    # ~0.66690 -- 0.12% from the stop -- so risk_usd $6.97 sized 8642 units
+    # instead of ~2150. The fill then landed at 0.66933, further from the stop
+    # than the price it sized on, and the stop-out cost $33.29 against a $6.97
+    # budget. That single trade is 84% of the account's entire realised loss
+    # ($25 of $29.68); the other 9 trades all sized within 13% of budget.
+    #
+    # Aborting, never resizing: a stop this close means the setup has already
+    # played out against us, and the risk budget is the thing being protected.
+    try:
+        from strategy2 import MIN_SL_PCT
+    except Exception:
+        MIN_SL_PCT = 0.4
+    if risk_pct_sl * 100 < MIN_SL_PCT:
+        msg = (f"{coin}: stop is {risk_pct_sl*100:.3f}% from execution price "
+               f"${price:.6g} (SL ${sl_price:.6g}), under the {MIN_SL_PCT}% "
+               f"floor — price drifted onto the stop between signal and fill. "
+               f"Sizing off it would risk ~{MIN_SL_PCT/max(risk_pct_sl*100, 1e-9):.1f}x "
+               f"the ${risk_usd:.2f} budget — trade aborted")
+        logger.error(msg)
+        try:
+            import tg
+            tg.dm_owner(f"⚠️ <b>Order aborted</b>\n{msg}")
+        except Exception:
+            pass
+        return None
+
     if risk_pct_sl > 0:
         notional = min(risk_usd / risk_pct_sl, account_val * leverage * 0.5)
     else:

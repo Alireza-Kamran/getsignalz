@@ -578,11 +578,25 @@ def _loop():
             info, exchange = _clients()
             mids = _hl_call(info.all_mids)
 
+            # Real-time equity + drawdown.
+            #
+            # The state is loaded AFTER this round-trip, never before. Loading
+            # first and saving after writes back a whole snapshot captured
+            # before the call, which silently erases anything
+            # register_position() added in the meantime -- the position stays
+            # on the exchange and in journal.json but disappears from
+            # `tracked`, so the ratchet never manages it again and it can only
+            # ever exit at its original stop.
+            #
+            # The window is not theoretical: _current_equity goes through
+            # _hl_call's retry ladder, so on a 502 storm it is seconds wide.
+            # That is how OP (opened 2026-08-13 00:01) was missing from a
+            # state.json saved at 02:05, with no exception logged anywhere.
+            equity  = _current_equity(info)
+
             state   = load_state()
             tracked = state.get("tracked", {})
 
-            # Real-time equity + drawdown
-            equity = _current_equity(info)
             if equity is not None:
                 _update_drawdown(state, equity)
                 save_state(state)

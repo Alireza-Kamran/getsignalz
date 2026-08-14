@@ -38,6 +38,62 @@ def save_config(cfg):
         json.dump(cfg, f, indent=2)
 
 
+def _r_of(t):
+    """Realised R for a closed trade, measured off the ORIGINAL stop.
+
+    `sl` is rewritten in place every time the ratchet fires, so measuring
+    against it would report every ratcheted winner as roughly 0R. sl_orig is
+    the risk actually taken at entry, which is what every backtest reports.
+    """
+    entry, ex, d = t.get("entry"), t.get("exit"), t.get("direction")
+    sl = t.get("sl_orig") or t.get("sl")
+    if None in (entry, sl, ex) or not d or entry == sl:
+        return None
+    return (ex - entry) * d / abs(entry - sl)
+
+
+def _sig_for(trade, signals):
+    """Join a trade back to the signal that opened it.
+
+    Matched on the nearest signal timestamp within 2h, not on the calendar
+    date. The date-only join this replaces silently mismatched whenever the
+    same coin traded twice in one day -- possible at MAX_TRADES=2 over a
+    20-coin watchlist, and it attributes one trade's entry conditions to the
+    other's outcome.
+    """
+    ot = trade.get("open_time") or ""
+    best, best_gap = None, None
+    for s in signals:
+        if s.get("coin") != trade.get("coin"):
+            continue
+        try:
+            gap = abs((datetime.fromisoformat(s["time"].replace("Z", "+00:00"))
+                       - datetime.fromisoformat(ot.replace("Z", "+00:00"))).total_seconds())
+        except Exception:
+            continue
+        if gap <= 7200 and (best_gap is None or gap < best_gap):
+            best, best_gap = s, gap
+    return best
+
+
+def _stretch_of(sig):
+    """Pull the ATR stretch out of a signal.
+
+    S2 does not store it as a field -- it only survives inside the human
+    reason string "4.2 ATR from mean" (live.py:733), so it is parsed back out
+    rather than lost. Returns None rather than guessing if the shape changes.
+    """
+    if sig.get("stretch") is not None:
+        return abs(float(sig["stretch"]))
+    for reason in sig.get("reasons", []):
+        if "ATR from mean" in reason:
+            try:
+                return abs(float(reason.split()[0]))
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
 def full_report():
     """
     Produce a full performance report as a string.
@@ -106,13 +162,16 @@ def full_report():
     # printed as -26.1% and +17.4% (2026-08-02). Account risk is unaffected --
     # size comes from risk_usd / stop distance -- but only R is comparable
     # between trades, and R is what every backtest reports. Read this table.
+    #
+    # NOTE on sources: journal.json preserves the entry stop, so R off it is
+    # correct. journal_s2.json does NOT -- the ratchet overwrites `sl` in
+    # place, so AVAX's +2.63R reads as +0.88R there. Compute R from this
+    # journal, or from sl_orig, never from journal_s2's `sl`.
     r_vals = []
     for t in trades:
-        entry, sl, ex = t.get("entry"), t.get("sl"), t.get("exit")
-        d = t.get("direction")
-        if None in (entry, sl, ex) or not d or entry == sl:
-            continue
-        r_vals.append((t["coin"], (ex - entry) * d / abs(entry - sl)))
+        r = _r_of(t)
+        if r is not None:
+            r_vals.append((t["coin"], r))
 
     lines.append(f"\n── R-MULTIPLE DISTRIBUTION ──")
     if r_vals:
@@ -126,51 +185,111 @@ def full_report():
     else:
         lines.append("  (no trades with complete entry/sl/exit/direction)")
 
-    # ── Confluence factor analysis ─────────────────────────────────
-    lines.append(f"\n── CONFLUENCE FACTOR WIN RATES ──")
-    factor_stats = defaultdict(lambda: {"win":0,"lose":0})
-
+    # ── Direction split ────────────────────────────────────────────
+    # S2's trigger is symmetric in code (strategy2.signal:219-222), but the
+    # MAX_ADX gate is not symmetric in effect: measured over 20 coins x ~1500
+    # 1h bars on 2026-08-14, the raw RSI+stretch trigger is near-balanced
+    # (888 long / 820 short) but survival past ADX<25 is not -- the gate kills
+    # 92.1% of longs and 96.7% of shorts, leaving 70 long / 27 short. Overbought
+    # excursions in crypto arrive *with* trend; oversold dips happen in quiet
+    # ranges. So the deployed system is structurally ~72/28 long-biased.
+    #
+    # Printed every night because the live book has been 100% long for 10
+    # trades, and the only way to tell "expected skew" from "the short leg is
+    # broken" is to watch the ratio accumulate against that 72/28 baseline.
+    lines.append(f"\n── DIRECTION SPLIT ──")
+    dir_stats = defaultdict(lambda: {"n":0,"w":0,"r":0.0})
     for t in trades:
-        sig = next((s for s in signals
-                    if s["coin"]==t["coin"]
-                    and s["time"][:10]==t["open_time"][:10]), None)
-        if not sig:
+        d = t.get("direction")
+        if not d:
             continue
-        won = _won(t)
-        for reason in sig.get("reasons", []):
-            # Normalize reason to factor key
-            key = reason.split(" ")[0].lower() if reason else "unknown"
-            if won:
-                factor_stats[key]["win"] += 1
-            else:
-                factor_stats[key]["lose"] += 1
-
-    for factor, fs in sorted(factor_stats.items(),
-                              key=lambda x: -(x[1]["win"]/(x[1]["win"]+x[1]["lose"]))):
-        total = fs["win"] + fs["lose"]
-        if total < 2:
+        k = "LONG" if d == 1 else "SHORT"
+        dir_stats[k]["n"] += 1
+        dir_stats[k]["w"] += 1 if _won(t) else 0
+        dir_stats[k]["r"] += _r_of(t) or 0.0
+    for k in ("LONG", "SHORT"):
+        ds = dir_stats.get(k)
+        if not ds or not ds["n"]:
+            lines.append(f"  {k:<6} 0 trades")
             continue
-        wr = fs["win"] / total * 100
-        lines.append(f"  {factor:<20} WR:{wr:.0f}%  ({fs['win']}W/{fs['lose']}L)")
+        lines.append(f"  {k:<6} {ds['n']} trades  WR:{ds['w']/ds['n']*100:.0f}%  "
+                     f"sumR:{ds['r']:+.2f}  meanR:{ds['r']/ds['n']:+.3f}")
+    lines.append("  (structural baseline from backtest: ~72% long / ~28% short)")
 
-    # ── Score threshold analysis ───────────────────────────────────
-    lines.append(f"\n── PERFORMANCE BY SIGNAL SCORE ──")
-    score_stats = defaultdict(lambda: {"win":0,"lose":0,"pct":0.0})
+    # ── Exit mechanism ─────────────────────────────────────────────
+    # The single most important operating metric under the current regime, and
+    # it was absent from this report until 2026-08-14. TP_R=5.0 is a backstop,
+    # not a target: in 10 S2 trades the take-profit has never once filled, so
+    # 100% of exits are stop-based. What separates a good night from a bad one
+    # is whether the stop that filled was the ORIGINAL stop (a full -1R loss)
+    # or a RATCHETED stop (locked-in profit). journal_s2 records result=="sl"
+    # for both, which is why raw result codes tell you nothing.
+    lines.append(f"\n── EXIT MECHANISM ──")
+    exit_stats = defaultdict(lambda: {"n":0,"r":0.0})
     for t in trades:
-        sig = next((s for s in signals
-                    if s["coin"]==t["coin"]
-                    and s["time"][:10]==t["open_time"][:10]), None)
-        score = sig["score"] if sig else 0
-        score_stats[score]["win"]  += 1 if _won(t) else 0
-        score_stats[score]["lose"] += 1 if not _won(t) else 0
-        score_stats[score]["pct"]  += t.get("lev_pct", 0) or 0
+        r = _r_of(t)
+        if r is None:
+            continue
+        # A stop that filled beyond entry in the trade's favour can only have
+        # got there by ratcheting; the original stop is always adverse.
+        if t.get("result") == "tp":
+            k = "TP backstop (5R)"
+        elif r > 0:
+            k = "ratcheted stop"
+        else:
+            k = "original stop"
+        exit_stats[k]["n"] += 1
+        exit_stats[k]["r"] += r
+    for k, es in sorted(exit_stats.items(), key=lambda x: -x[1]["n"]):
+        lines.append(f"  {k:<20} {es['n']:2} trades  sumR:{es['r']:+.2f}  "
+                     f"meanR:{es['r']/es['n']:+.3f}")
 
-    for score in sorted(score_stats.keys()):
-        ss = score_stats[score]
-        total = ss["win"] + ss["lose"]
-        wr = ss["win"]/total*100
-        ev = ss["pct"]/total
-        lines.append(f"  Score {score}: {total} trades  WR:{wr:.0f}%  AvgPnL:{ev:+.1f}%")
+    # ── Entry condition bands ──────────────────────────────────────
+    # Replaces the old "confluence factor win rate" table, which was noise
+    # twice over. It keyed on reason.split(" ")[0], so "4.2 ATR from mean"
+    # became a factor literally named "4.2" and every distinct stretch value
+    # got its own one-row bucket. Worse, S2 emits the SAME three reasons on
+    # every signal, so the surviving keys ("rsi", "adx") could only ever report
+    # the overall win rate back -- 36% against 36%, dressed up as a finding.
+    #
+    # What actually discriminates is the VALUE, not the presence: how deep the
+    # RSI went, how stretched from the mean, how close to the ADX ceiling.
+    lines.append(f"\n── ENTRY CONDITION BANDS ──")
+
+    def _band(vals, val, labels):
+        for edge, lab in zip(vals, labels):
+            if val < edge:
+                return lab
+        return labels[-1]
+
+    banded = defaultdict(lambda: {"n":0,"w":0,"r":0.0})
+    for t in trades:
+        sig = _sig_for(t, signals)
+        r   = _r_of(t)
+        if not sig or r is None:
+            continue
+        rsi_v, adx_v = sig.get("rsi"), sig.get("adx")
+        stretch_v = _stretch_of(sig)
+        for label in (
+            f"RSI {_band([15,20,23], rsi_v, ['<15','15-20','20-23','23-25'])}"
+            if rsi_v is not None else None,
+            f"ADX {_band([15,20], adx_v, ['<15','15-20','20-25'])}"
+            if adx_v is not None else None,
+            f"stretch {_band([2.0,3.0], stretch_v, ['1.5-2','2-3','3+'])}"
+            if stretch_v is not None else None,
+        ):
+            if label is None:
+                continue
+            banded[label]["n"] += 1
+            banded[label]["w"] += 1 if r > 0 else 0
+            banded[label]["r"] += r
+    if banded:
+        for label, bs in sorted(banded.items()):
+            lines.append(f"  {label:<16} n={bs['n']:2}  WR:{bs['w']/bs['n']*100:3.0f}%  "
+                         f"meanR:{bs['r']/bs['n']:+.3f}")
+        lines.append("  (n is far too small to act on; this is an accumulator)")
+    else:
+        lines.append("  (no trades joined to a signal)")
 
     # ── Duration analysis ──────────────────────────────────────────
     lines.append(f"\n── TRADE DURATION ──")
@@ -182,9 +301,31 @@ def full_report():
         lines.append(f"  Avg losing trade duration:   {avg_loss_dur:.1f}h")
 
     # ── Current config ─────────────────────────────────────────────
-    lines.append(f"\n── CURRENT STRATEGY CONFIG ──")
+    #
+    # This block used to print strategy_config.json -- MIN_SCORE, TRAIL_PCT 8%,
+    # SESSION 11-24, MIN_ADX 30 and a 12-coin watchlist -- under the heading
+    # "CURRENT STRATEGY CONFIG". Every one of those values is inert: they
+    # belong to the retired S1 engine and have had no effect since S1_ENABLED
+    # went False. Labelling them "current" is how a reader ends up tuning a
+    # trail that has never executed a trade, so the live constants are printed
+    # instead and the dead ones are marked as dead.
+    lines.append(f"\n── CURRENT STRATEGY CONFIG (LIVE = strategy2.py) ──")
+    try:
+        import strategy2 as _s2
+        lines.append(f"  RSI:            {_s2.RSI_OVERSOLD} / {_s2.RSI_OVERBOUGHT}")
+        lines.append(f"  MAX_ADX:        {_s2.MAX_ADX}")
+        lines.append(f"  MIN_STRETCH_ATR:{_s2.MIN_STRETCH_ATR}")
+        lines.append(f"  SL_ATR_MULT:    {_s2.SL_ATR_MULT}")
+        lines.append(f"  TP_R:           {_s2.TP_R}  (backstop -- has never filled)")
+        lines.append(f"  TRAIL_START_R:  {_s2.TRAIL_START_R}   STEP_R: {_s2.TRAIL_STEP_R}")
+        lines.append(f"  MAX_TRADES:     {_s2.MAX_TRADES}")
+        lines.append(f"  S2_RISK_PCT:    {_s2.S2_RISK_PCT*100:.2f}% of account")
+        lines.append(f"  WATCHLIST:      {len(_s2.WATCHLIST)} coins")
+        lines.append(f"  (all owner-locked -- report, do not tune)")
+    except Exception as e:
+        lines.append(f"  (could not read strategy2 constants: {e})")
+    lines.append(f"\n── DEAD S1 CONFIG (strategy_config.json -- no effect) ──")
     lines.append(f"  MIN_SCORE:      {config.get('min_score', 6)}")
-    lines.append(f"  MAX_TRADES:     {config.get('max_trades', 2)}")
     lines.append(f"  TRAIL_PCT:      {config.get('trail_pct', 0.08)*100:.0f}%")
     lines.append(f"  SESSION:        {config.get('session_start_utc',7)}:00-{config.get('session_end_utc',22)}:00 UTC")
     lines.append(f"  MIN_ADX:        {config.get('min_adx', 20)}")
