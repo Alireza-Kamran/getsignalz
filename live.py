@@ -767,7 +767,7 @@ def run():
                                 "R": abs(entry2 - res2["sl"]),
                             }
                             log_trade_open(c2, dir2, entry2, res2["sl"],
-                                           res2["tp"], size2, lev2)
+                                           res2["tp"], size2, lev2, strategy="S2")
                             tracker.register_position(
                                 coin=c2, direction=dir2, entry=entry2,
                                 sl=res2["sl"], tp=res2["tp"], size=size2,

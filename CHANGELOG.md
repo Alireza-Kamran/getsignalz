@@ -251,6 +251,18 @@ the sizing working correctly.
 
 ---
 
+## v1.29.0 — 2026-08-15
+
+**Stats:** 11 trades · WR: 36% · P&L: -51.1%
+
+**Code improvements (4):**
+- tracker.py: If an S2 trade ever reaches its 5R backstop TP, _trail_tp fires in the tracker thread, cancels ALL reduce-only orders (including the ratcheted stop from _check_trail_s2), and places a fixed 8%-from-peak trailing stop — overriding the calibrated S2 exit entirely. The guard eliminates that interference with one line.
+- analyze.py: _edge_confidence used a date-only join to match trades to signals while full_report already uses _sig_for's 2h timestamp-nearest window. A date-only join misattributes when two signals for the same coin land on the same calendar day, producing a wrong edge-confidence score in the Trust Score.
+- journal.py: journal.json trades have no strategy tag, so full_report's per-coin EV table, R-multiple distribution, and direction split all blend S1 and S2 data silently once both engines trade. Adding a strategy parameter with default 'S1' is fully backward-compatible with the existing S1 caller; the companion live.py change tags S2 trades correctly going forward.
+- live.py: Companion to the journal.py change: the S2 trade-open path must pass strategy='S2' so all future journal records are tagged by engine. The S1 call site already defaults to 'S1' and requires no change.
+
+---
+
 ## v1.28.0 — 2026-08-14
 
 **Stats:** 11 trades · WR: 36% · P&L: -51.1%

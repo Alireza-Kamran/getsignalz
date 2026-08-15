@@ -368,8 +368,7 @@ def _edge_confidence(journal, config):
 
     qualifying = []
     for t in trades:
-        sig = next((s for s in signals
-                    if s["coin"] == t["coin"] and s["time"][:10] == t["open_time"][:10]), None)
+        sig = _sig_for(t, signals)
         if s2_engine:
             if sig and sig.get("fired"):
                 qualifying.append(t)

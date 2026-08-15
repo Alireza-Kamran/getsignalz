@@ -44,7 +44,7 @@ def log_signal(coin, direction, score, reasons, price, sl, tp, tf,
     _save(data)
 
 
-def log_trade_open(coin, direction, entry, sl, tp, size, leverage):
+def log_trade_open(coin, direction, entry, sl, tp, size, leverage, strategy="S1"):
     data = _load()
     data["trades"].append({
         "id":        len(data["trades"]) + 1,
@@ -57,6 +57,7 @@ def log_trade_open(coin, direction, entry, sl, tp, size, leverage):
         "tp":        tp,
         "size":      size,
         "leverage":  leverage,
+        "strategy":  strategy,
         "exit":      None,
         "result":    None,   # "tp" or "sl"
         "lev_pct":   None,

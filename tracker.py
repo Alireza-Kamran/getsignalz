@@ -490,6 +490,11 @@ def _trail_tp(coin, t, price, exchange, info):
 
     This replaces the fixed TP with a dynamic one that lets winners run.
     """
+    # S2 exits are managed exclusively by _check_trail_s2 in live.py;
+    # running the S1 trail here would cancel the ratcheted S2 stop and
+    # replace it with an unrelated 8%-from-peak rule.
+    if t.get("strategy") == "S2":
+        return
     direction = t["dir"]
     entry     = t["entry"]
     orig_tp   = t["tp"]
