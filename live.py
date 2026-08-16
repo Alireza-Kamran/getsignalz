@@ -335,6 +335,14 @@ def _exit_price(coin, t):
     try:
         opened, since = t.get("opened_at"), 0
         if opened is not None:
+            # Accepts both shapes deliberately: _open_trades holds a datetime,
+            # but state.json round-trips opened_at as an ISO string, and the
+            # ghost-close path on startup reads straight from state. Calling
+            # .tzinfo on the string raised AttributeError, which this function's
+            # own except-clause swallowed into a silent mid-price fallback --
+            # the one caller that most needs a real fill quietly never got one.
+            if isinstance(opened, str):
+                opened = datetime.fromisoformat(opened)
             if opened.tzinfo is None:
                 opened = opened.replace(tzinfo=timezone.utc)
             since = int(opened.timestamp() * 1000)
@@ -577,7 +585,14 @@ def run():
             for coin, t in saved.items():
                 if coin not in live and coin not in _open_trades:
                     try:
-                        exit_px   = get_price(coin)
+                        # Fills, not the mid. This position closed while the bot
+                        # was DOWN, so the current mid can be hours of drift away
+                        # from the price that actually traded -- the worst case
+                        # of the staleness get_close_fill exists to remove, and
+                        # it is written straight into the permanent journal and
+                        # lifetime stats. Falls back to the mid only if the
+                        # exchange reports no attributable closing fill.
+                        exit_px   = _exit_price(coin, t)
                         direction = t["dir"]
                         entry_px  = t["entry"]
                         tp_px     = t["tp"]

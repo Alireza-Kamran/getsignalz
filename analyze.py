@@ -2,7 +2,7 @@
 Performance analysis engine for the self-learn session.
 Produces clean statistics the agent uses to make strategy decisions.
 """
-import json, os
+import json, os, re, glob
 from datetime import datetime, timezone
 from collections import defaultdict
 
@@ -92,6 +92,67 @@ def _stretch_of(sig):
             except (ValueError, IndexError):
                 return None
     return None
+
+
+_SCAN_RE = re.compile(
+    r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) \| INFO \| ([A-Z]{2,6})\s+\$([\d.]+)"
+    r"\s+RSI (\d+)\s+ADX (\d+)"
+)
+
+
+def _scan_census(logs=None):
+    """Per-coin scan observations recovered from the bot logs.
+
+    Every hour the bot prints RSI/ADX for all 20 coins and then throws the
+    reading away unless it becomes a signal. That discarded stream is the only
+    part of this system with real statistical power: 11 closed trades give a
+    win-rate sigma of ~15pp, while the same window holds thousands of
+    coin-observations. Both measurements below are things the trade journal
+    physically cannot answer, because they are about the setups that never
+    became trades.
+
+    Returns {coin: [(timestamp, price, rsi, adx), ...]}.
+    """
+    if logs is None:
+        logs = sorted(glob.glob("/root/trade/bot.2026-*.log"))[-1:] + [BOTLOG_F]
+    per = defaultdict(list)
+    for path in logs:
+        try:
+            with open(path, errors="ignore") as fh:
+                for line in fh:
+                    m = _SCAN_RE.match(line)
+                    if m:
+                        per[m.group(2)].append((m.group(1), float(m.group(3)),
+                                                int(m.group(4)), int(m.group(5))))
+        except OSError:
+            continue
+    return per
+
+
+def _feed_staleness(per):
+    """Fraction of consecutive hourly bars that repeated the previous price.
+
+    A frozen bar is not a cosmetic problem: RSI and ADX computed across
+    repeated prices are fiction, and a signal derived from them is fiction
+    priced with real money. On 2026-08-05 this feed carried 18.5% frozen bars
+    against 0.4% on mainnet, which is why every strategy2 constant is currently
+    held void pending re-derivation. Tracking it nightly is how we know whether
+    that re-derivation is even possible yet.
+    """
+    out = {}
+    for coin, obs in per.items():
+        if len(obs) < 2:
+            continue
+        frozen = run = longest = 0
+        for i in range(1, len(obs)):
+            if obs[i][1] == obs[i - 1][1]:
+                frozen += 1
+                run += 1
+                longest = max(longest, run)
+            else:
+                run = 0
+        out[coin] = (len(obs), frozen, frozen / (len(obs) - 1), longest)
+    return out
 
 
 def full_report():
@@ -299,6 +360,67 @@ def full_report():
     if losses:
         avg_loss_dur = sum(t.get("duration_h",0) or 0 for t in losses) / len(losses)
         lines.append(f"  Avg losing trade duration:   {avg_loss_dur:.1f}h")
+
+    # ── Rejection census + feed health ─────────────────────────────
+    # Both are measured off the scan log rather than the journal, because both
+    # ask about setups that never became trades. See _scan_census.
+    try:
+        import strategy2 as _s2c
+        per = _scan_census()
+        obs_n = sum(len(v) for v in per.values())
+        if obs_n:
+            lines.append(f"\n── ENTRY GATE CENSUS (scan log, n={obs_n} obs) ──")
+            flat = [o for v in per.values() for o in v]
+            span = f"{min(o[0] for o in flat)[:10]} → {max(o[0] for o in flat)[:10]}"
+            lines.append(f"  window: {span}")
+            # The scan loop prints the S1 WATCHLIST only, so this covers those
+            # coins -- not all of strategy2's. Stated rather than glossed: the
+            # admitted-rate below is a sample of S2's universe, not a census.
+            lines.append(f"  coverage: {len(per)} logged coins of "
+                         f"{len(_s2c.WATCHLIST)} in the S2 watchlist")
+            for label, cand in (
+                ("long  (RSI<=%d)" % _s2c.RSI_OVERSOLD,
+                 [o for o in flat if o[2] <= _s2c.RSI_OVERSOLD]),
+                ("short (RSI>=%d)" % _s2c.RSI_OVERBOUGHT,
+                 [o for o in flat if o[2] >= _s2c.RSI_OVERBOUGHT]),
+            ):
+                if not cand:
+                    lines.append(f"  {label}: none observed")
+                    continue
+                ok = sum(1 for o in cand if o[3] < _s2c.MAX_ADX)
+                lines.append(
+                    f"  {label}: {len(cand):4} RSI-qualified, "
+                    f"{ok:3} also ADX<{_s2c.MAX_ADX} = {ok/len(cand)*100:.1f}% admitted"
+                )
+                for lo, hi in ((0, 20), (20, 25), (25, 30), (30, 40), (40, 999)):
+                    n = sum(1 for o in cand if lo <= o[3] < hi)
+                    if n:
+                        lines.append(
+                            f"      ADX {lo:>3}-{hi:<3} n={n:>4} "
+                            f"({n/len(cand)*100:>5.1f}%) "
+                            f"{'pass' if hi <= _s2c.MAX_ADX else 'BLOCKED'}"
+                        )
+            lines.append("  NOTE: RSI extremes are CAUSED by strong directional")
+            lines.append("  moves, which is exactly what raises ADX. The oversold")
+            lines.append("  and ranging conditions are anti-correlated by")
+            lines.append("  construction -- this is the binding constraint on")
+            lines.append("  trade frequency, not a tuning detail.")
+
+            stale = _feed_staleness(per)
+            if stale:
+                lines.append(f"\n── FEED HEALTH (frozen bars) ──")
+                overall_f = sum(s[1] for s in stale.values())
+                overall_n = sum(s[0] - 1 for s in stale.values())
+                for coin, (n, fz, pct, longest) in sorted(
+                        stale.items(), key=lambda x: -x[1][2]):
+                    flag = "  <-- unusable" if pct > 0.10 else ""
+                    lines.append(f"  {coin:<6} {pct*100:5.1f}% frozen  "
+                                 f"(max {longest} bars stalled){flag}")
+                lines.append(f"  OVERALL: {overall_f}/{overall_n} = "
+                             f"{overall_f/overall_n*100:.1f}%")
+                lines.append("  (baseline: 18.5% testnet 2026-08-05 vs 0.4% mainnet)")
+    except Exception as e:
+        lines.append(f"\n  (scan census unavailable: {e})")
 
     # ── Current config ─────────────────────────────────────────────
     #
