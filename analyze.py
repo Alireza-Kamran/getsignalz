@@ -155,6 +155,52 @@ def _feed_staleness(per):
     return out
 
 
+# Last commit that touched an exit constant in strategy2.py (TP_R 3.0 -> 5.0,
+# TRAIL_START_R -> 2.50). Trades opened before this ran a materially different
+# exit and must not be pooled with the ones after it -- see _excursion_stats.
+EXIT_REGIME_FROM = "2026-08-05"
+
+
+def _excursion_stats(state):
+    """Per-trade maximum favourable/adverse excursion, expressed in R.
+
+    Win rate and realised R only describe what the EXIT rule did. MFE describes
+    what the ENTRY offered before any exit rule touched it, and the two answer
+    opposite questions: an entry whose favourable excursion rarely reaches the
+    stop distance is unprofitable under every exit rule, while an entry with
+    large MFE and small realised R is an exit problem. Nothing in this system
+    read that apart until 2026-08-17, so "should the trail be tighter" was being
+    argued from realised R -- which is the trail's own output.
+
+    `peak_roe_pct` and `max_adverse_pct` are already recorded per trade as
+    LEVERAGED return-on-equity percentages, so both are divided by leverage to
+    recover the underlying price move before normalising by the stop distance.
+
+    Returns [{coin, opened, mfe_r, mae_r, real_r, regime}, ...], newest last.
+    """
+    out = []
+    for t in state.get("closed_trades", []):
+        try:
+            entry = float(t["entry"])
+            sl    = float(t["sl"])
+            lev   = float(t.get("leverage") or 0)
+            risk_pct = abs(entry - sl) / entry * 100
+            if not (risk_pct > 0 and lev > 0):
+                continue          # degenerate stop or missing leverage: unusable
+            opened = str(t.get("opened_at", ""))[:10]
+            out.append({
+                "coin":   t.get("coin", "?"),
+                "opened": opened,
+                "mfe_r":  (float(t.get("peak_roe_pct")   or 0.0) / lev) / risk_pct,
+                "mae_r":  (float(t.get("max_adverse_pct") or 0.0) / lev) / risk_pct,
+                "real_r": (float(t.get("lev_pct")        or 0.0) / lev) / risk_pct,
+                "regime": "new" if opened >= EXIT_REGIME_FROM else "old",
+            })
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            continue
+    return out
+
+
 def full_report():
     """
     Produce a full performance report as a string.
@@ -305,6 +351,52 @@ def full_report():
         lines.append(f"  {k:<20} {es['n']:2} trades  sumR:{es['r']:+.2f}  "
                      f"meanR:{es['r']/es['n']:+.3f}")
 
+    # ── Excursion (MFE/MAE) ────────────────────────────────────────
+    # The section above measures the exit. This one measures the entry, which
+    # is the only way to tell the two apart. See _excursion_stats.
+    exc = _excursion_stats(state)
+    if exc:
+        try:
+            import strategy2 as _s2x
+            arm_r = float(_s2x.TRAIL_START_R)
+        except Exception:
+            arm_r = None
+        mfes = sorted(x["mfe_r"] for x in exc)
+        n    = len(mfes)
+        med  = mfes[n // 2] if n % 2 else (mfes[n // 2 - 1] + mfes[n // 2]) / 2
+        lines.append(f"\n── EXCURSION: WHAT THE ENTRY OFFERED (n={n}) ──")
+        lines.append(f"  median MFE: {med:+.2f}R   best: {mfes[-1]:+.2f}R   "
+                     f"worst: {mfes[0]:+.2f}R")
+        for thr in (0.5, 1.0, 1.5, 2.0, 2.5):
+            hit = sum(1 for m in mfes if m >= thr)
+            lines.append(f"    reached >={thr:.1f}R favourable:  {hit:2}/{n}  "
+                         f"({hit/n*100:4.0f}%)")
+        if arm_r is not None:
+            armed = sum(1 for m in mfes if m >= arm_r)
+            lines.append(f"  live TRAIL_START_R={arm_r:g} armed in {armed}/{n} "
+                         f"trades ({armed/n*100:.0f}%) — a trail that never arms "
+                         f"cannot be the thing costing money")
+        lines.append("  per trade (MFE -> realised):")
+        for x in exc:
+            give = x["mfe_r"] - x["real_r"]
+            lines.append(f"    {x['coin']:<5} {x['opened']}  MFE {x['mfe_r']:+5.2f}R  "
+                         f"MAE {x['mae_r']:+5.2f}R  ->  {x['real_r']:+5.2f}R  "
+                         f"(gave back {give:+.2f}R)  [{x['regime']}]")
+        # Exit-regime split. Pooling these hides that the constants changed
+        # underneath the record on 2026-08-05.
+        for lab, key in (("pre-" + EXIT_REGIME_FROM, "old"),
+                         (EXIT_REGIME_FROM + " onward", "new")):
+            g = [x for x in exc if x["regime"] == key]
+            if not g:
+                continue
+            rs = [x["real_r"] for x in g]
+            w  = sum(1 for r in rs if r > 0)
+            lines.append(f"  exit regime {lab:<16} n={len(g)}  WR:{w/len(g)*100:3.0f}%  "
+                         f"meanR:{sum(rs)/len(g):+.3f}")
+        lines.append("  CAUTION: retrofitting a take-profit onto an MFE column is the")
+        lines.append("  most overfit-prone sum in trading — every trade 'would have'")
+        lines.append("  hit any target below its own peak, by construction.")
+
     # ── Entry condition bands ──────────────────────────────────────
     # Replaces the old "confluence factor win rate" table, which was noise
     # twice over. It keyed on reason.split(" ")[0], so "4.2 ATR from mean"
@@ -419,6 +511,49 @@ def full_report():
                 lines.append(f"  OVERALL: {overall_f}/{overall_n} = "
                              f"{overall_f/overall_n*100:.1f}%")
                 lines.append("  (baseline: 18.5% testnet 2026-08-05 vs 0.4% mainnet)")
+
+                # Does a dirty feed actually cost money, or is it only ugly?
+                # The trade record can answer that by joining each closed trade
+                # to its own coin's frozen rate. WATCHLIST is owner-locked, so
+                # this exists to hand Kamran evidence, not to act on it.
+                paired = []
+                for t in trades:
+                    r = _r_of(t)
+                    s = stale.get(t.get("coin"))
+                    if r is not None and s:
+                        paired.append((r, s[2]))
+                if len(paired) >= 4:
+                    clean = [r for r, f in paired if f < 0.03]
+                    dirty = [r for r, f in paired if f >= 0.03]
+                    lines.append("  REALISED R BY FEED QUALITY (coins in the scan log only):")
+                    if clean:
+                        lines.append(f"    clean (<3% frozen)   n={len(clean)}  "
+                                     f"meanR:{sum(clean)/len(clean):+.3f}")
+                    if dirty:
+                        lines.append(f"    dirty (>=3% frozen)  n={len(dirty)}  "
+                                     f"meanR:{sum(dirty)/len(dirty):+.3f}")
+                    lines.append("    (n tiny and this is a post-hoc slice -- an "
+                                 "accumulator, not a verdict)")
+
+                # Control test: are frozen bars MANUFACTURING entry signals?
+                # If a stalled price could fake the oversold+ranging combination
+                # the gate looks for, the whole record would be built on
+                # fictional setups. Measured, not assumed.
+                sq = sn = fq = fn = 0
+                for obs in per.values():
+                    for i in range(1, len(obs)):
+                        _, p, rsi, adx = obs[i]
+                        qual = (rsi <= 25 or rsi >= 75) and adx < 25
+                        if p == obs[i - 1][1]:
+                            sn += 1; sq += qual
+                        else:
+                            fn += 1; fq += qual
+                if sn and fn:
+                    lines.append(f"  GATE CONTAMINATION CHECK: qualifying rate on "
+                                 f"frozen bars {sq}/{sn} ({sq/sn*100:.2f}%) vs live "
+                                 f"bars {fq}/{fn} ({fq/fn*100:.2f}%)")
+                    lines.append("    (a frozen price cannot print a NEW extreme, so "
+                                 "staleness suppresses signals rather than faking them)")
     except Exception as e:
         lines.append(f"\n  (scan census unavailable: {e})")
 
