@@ -38,15 +38,27 @@ def save_config(cfg):
         json.dump(cfg, f, indent=2)
 
 
-def _r_of(t):
-    """Realised R for a closed trade, measured off the ORIGINAL stop.
+def _entry_stop(t):
+    """The stop as it stood at ENTRY -- the denominator of every R figure.
 
-    `sl` is rewritten in place every time the ratchet fires, so measuring
-    against it would report every ratcheted winner as roughly 0R. sl_orig is
-    the risk actually taken at entry, which is what every backtest reports.
+    `sl` is rewritten in place every time the ratchet fires, and it only ever
+    fires on trades that went far enough to arm it. So reading `sl` does not
+    add noise, it adds a bias that lands exclusively on the winners: SOL
+    (2026-08-16) armed at +2.5R, had its stop rewritten from 73.781 to 75.897,
+    and every R computed off that stop came out at ~1.0R instead of ~2.5R.
+    Every loser reads correctly, so the error is invisible in aggregate and
+    silently flattens the fat tail the whole strategy depends on.
+
+    Both R consumers must go through here. `_r_of` already knew this rule;
+    `_excursion_stats` re-derived it independently and got it wrong for a day.
     """
+    return t.get("sl_orig") or t.get("sl")
+
+
+def _r_of(t):
+    """Realised R for a closed trade, measured off the ORIGINAL stop."""
     entry, ex, d = t.get("entry"), t.get("exit"), t.get("direction")
-    sl = t.get("sl_orig") or t.get("sl")
+    sl = _entry_stop(t)
     if None in (entry, sl, ex) or not d or entry == sl:
         return None
     return (ex - entry) * d / abs(entry - sl)
@@ -182,7 +194,7 @@ def _excursion_stats(state):
     for t in state.get("closed_trades", []):
         try:
             entry = float(t["entry"])
-            sl    = float(t["sl"])
+            sl    = float(_entry_stop(t))
             lev   = float(t.get("leverage") or 0)
             risk_pct = abs(entry - sl) / entry * 100
             if not (risk_pct > 0 and lev > 0):
@@ -194,6 +206,14 @@ def _excursion_stats(state):
                 "mfe_r":  (float(t.get("peak_roe_pct")   or 0.0) / lev) / risk_pct,
                 "mae_r":  (float(t.get("max_adverse_pct") or 0.0) / lev) / risk_pct,
                 "real_r": (float(t.get("lev_pct")        or 0.0) / lev) / risk_pct,
+                # What the ratchet ACTUALLY locked, when the trade recorded it.
+                # Preferred over inferring arming from MFE: peak_roe_pct is
+                # sampled by the poll loop, so it undershoots. SOL armed at
+                # exactly +2.5R (bot.log "[S2] SOL stop -> +2.5R") but its
+                # recorded peak is 2.46R, so an MFE>=2.5 test scores a real
+                # arm as a miss. Only trades from 2026-08-16 carry this field.
+                "locked_r": (None if t.get("locked_r") is None
+                             else float(t["locked_r"])),
                 "regime": "new" if opened >= EXIT_REGIME_FROM else "old",
             })
         except (KeyError, TypeError, ValueError, ZeroDivisionError):
@@ -289,6 +309,32 @@ def full_report():
         lines.append(f"  best:{max(rs):+.2f}R  worst:{min(rs):+.2f}R  "
                      f"  >=1.5R:{sum(1 for r in rs if r>=1.5)}  >=3R:{sum(1 for r in rs if r>=3)}")
         lines.append("  " + "  ".join(f"{c}:{r:+.2f}" for c, r in r_vals[-12:]))
+
+        # ── Expected value ─────────────────────────────────────────
+        # The number the whole system lives or dies on, and it was never
+        # printed. Win rate alone is meaningless here: this book pairs a
+        # ~-1.03R loss with a ~+1.56R win, so it clears breakeven well under
+        # 50%. Stated with its own error bar, because at this n the honest
+        # answer is almost always "indistinguishable from zero" and a report
+        # that hides that invites tuning on noise.
+        w = [r for r in rs if r > 0]
+        l = [r for r in rs if r <= 0]
+        if w and l:
+            aw, al = sum(w) / len(w), abs(sum(l) / len(l))
+            wr, be = len(w) / n, al / (aw + al)
+            ev = wr * aw - (1 - wr) * al
+            mean = sum(rs) / n
+            sd = (sum((v - mean) ** 2 for v in rs) / (n - 1)) ** 0.5 if n > 1 else 0.0
+            tstat = mean / (sd / n ** 0.5) if sd > 0 else 0.0
+            sig = (wr * (1 - wr) / n) ** 0.5 * 100
+            lines.append(f"  EV = {wr:.3f} x {aw:+.3f}R - {1-wr:.3f} x {al:.3f}R "
+                         f"= {ev:+.4f}R per trade")
+            lines.append(f"  breakeven WR {be*100:.1f}% (avgLoss/(avgWin+avgLoss)); "
+                         f"actual {wr*100:.1f}% = {(wr-be)*100:+.1f}pp")
+            lines.append(f"  sd {sd:.2f}R, t={tstat:+.2f}, sigma(WR)={sig:.1f}pp "
+                         f"-> {(wr-be)/(sig/100) if sig else 0:+.2f} sigma from breakeven")
+            lines.append("  (|t| < 2 means this is not yet distinguishable from a "
+                         "coin flip -- do not tune on it)")
     else:
         lines.append("  (no trades with complete entry/sl/exit/direction)")
 
@@ -365,6 +411,22 @@ def full_report():
         n    = len(mfes)
         med  = mfes[n // 2] if n % 2 else (mfes[n // 2 - 1] + mfes[n // 2]) / 2
         lines.append(f"\n── EXCURSION: WHAT THE ENTRY OFFERED (n={n}) ──")
+
+        # Coverage reconciliation. This section reads state.json while every
+        # section above reads journal.json, and the two can disagree: OP
+        # (2026-08-13) was written to the journal but never reached state's
+        # closed_trades, so it is absent here. That is not cosmetic -- OP was
+        # a -1.09R loss, and dropping it lifted the current-regime meanR shown
+        # below from -0.03R to +0.14R. A silently smaller n in a section that
+        # sits under a bigger headline n is exactly how a book flatters itself.
+        jkeys = {(t.get("coin"), str(t.get("open_time", ""))[:10]) for t in trades}
+        ekeys = {(x["coin"], x["opened"]) for x in exc}
+        missing = sorted(jkeys - ekeys)
+        if missing:
+            lines.append(f"  ⚠️  covers {n} of {len(trades)} closed trades. "
+                         f"Missing (no state record, excluded from every figure "
+                         f"in this section): "
+                         + ", ".join(f"{c} {d}" for c, d in missing))
         lines.append(f"  median MFE: {med:+.2f}R   best: {mfes[-1]:+.2f}R   "
                      f"worst: {mfes[0]:+.2f}R")
         for thr in (0.5, 1.0, 1.5, 2.0, 2.5):
@@ -372,16 +434,59 @@ def full_report():
             lines.append(f"    reached >={thr:.1f}R favourable:  {hit:2}/{n}  "
                          f"({hit/n*100:4.0f}%)")
         if arm_r is not None:
-            armed = sum(1 for m in mfes if m >= arm_r)
-            lines.append(f"  live TRAIL_START_R={arm_r:g} armed in {armed}/{n} "
-                         f"trades ({armed/n*100:.0f}%) — a trail that never arms "
-                         f"cannot be the thing costing money")
+            # Recorded fact first, sampled proxy only where no record exists.
+            def _armed(x):
+                if x["locked_r"] is not None:
+                    return x["locked_r"] > 0
+                return x["mfe_r"] >= arm_r
+            armed    = [x for x in exc if _armed(x)]
+            inferred = sum(1 for x in armed if x["locked_r"] is None)
+            new      = [x for x in exc if x["regime"] == "new"]
+            new_arm  = [x for x in new if _armed(x)]
+            lines.append(f"  live TRAIL_START_R={arm_r:g} armed in {len(armed)}/{n} "
+                         f"trades ({len(armed)/n*100:.0f}%)"
+                         + (f" — {inferred} inferred from MFE, no locked_r recorded"
+                            if inferred else ""))
+            if new:
+                lines.append(f"    under the current exit regime only: "
+                             f"{len(new_arm)}/{len(new)} armed "
+                             f"({len(new_arm)/len(new)*100:.0f}%) — this is the "
+                             f"rate that describes the deployed system")
         lines.append("  per trade (MFE -> realised):")
         for x in exc:
             give = x["mfe_r"] - x["real_r"]
             lines.append(f"    {x['coin']:<5} {x['opened']}  MFE {x['mfe_r']:+5.2f}R  "
                          f"MAE {x['mae_r']:+5.2f}R  ->  {x['real_r']:+5.2f}R  "
                          f"(gave back {give:+.2f}R)  [{x['regime']}]")
+
+        # Invariant. A trade cannot exit above its own peak or below its own
+        # trough, so MAE <= realised <= MFE holds by construction for every
+        # row -- any violation means the three columns were not measured
+        # against the same denominator. This is not hypothetical: from
+        # 2026-08-17 to 08-18 this table normalised by the ratcheted stop
+        # while realised R used the entry stop, and SOL printed MFE +0.98R
+        # against a true +2.46R for a full day without anyone noticing.
+        # Deriving a metric and never asserting its own arithmetic is how a
+        # measurement bug survives a nightly review that is looking straight
+        # at it.
+        # Tolerance, not zero: peak_roe_pct and max_adverse_pct are SAMPLED by
+        # the tracker poll loop while the exit is an exact fill, so a trade
+        # that closes right at its extreme routinely overshoots the recorded
+        # peak by a poll interval. Observed overshoot on the current book is
+        # 0.01-0.02R. 0.10R sits well clear of that and still catches the real
+        # thing by a mile -- the stop-denominator bug put SOL 1.50R over.
+        TOL = 0.10
+        bad = [x for x in exc
+               if x["real_r"] > x["mfe_r"] + TOL or x["real_r"] < x["mae_r"] - TOL]
+        if bad:
+            lines.append(f"  ⚠️  INVARIANT VIOLATED (MAE <= realised <= MFE, tol {TOL}R):")
+            for x in bad:
+                lines.append(f"      {x['coin']} {x['opened']}: MAE {x['mae_r']:+.2f} "
+                             f"realised {x['real_r']:+.2f} MFE {x['mfe_r']:+.2f} "
+                             f"— excursion and realised R disagree on the stop")
+        else:
+            lines.append(f"  invariant MAE <= realised <= MFE: OK on all {len(exc)} "
+                         f"(tol {TOL}R for poll sampling)")
         # Exit-regime split. Pooling these hides that the constants changed
         # underneath the record on 2026-08-05.
         for lab, key in (("pre-" + EXIT_REGIME_FROM, "old"),
