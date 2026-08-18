@@ -126,7 +126,7 @@ def _scan_census(logs=None):
     Returns {coin: [(timestamp, price, rsi, adx), ...]}.
     """
     if logs is None:
-        logs = sorted(glob.glob("/root/trade/bot.2026-*.log"))[-1:] + [BOTLOG_F]
+        logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
     per = defaultdict(list)
     for path in logs:
         try:

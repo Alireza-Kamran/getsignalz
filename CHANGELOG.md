@@ -251,6 +251,16 @@ the sizing working correctly.
 
 ---
 
+## v1.31.0 — 2026-08-18
+
+**Stats:** 12 trades · WR: 42% · P&L: -31.0%
+
+**Code improvements (2):**
+- tracker.py: duration_h was never written to state.json closed_trades, so the public dashboard always showed 'Avg hold: 0.0h' and filtered it out of every avg-hold computation. The field is correctly populated in journal.json by log_trade_close but that path is separate from the state record the dashboard reads. Fix computes duration from opened_at (always a JSON string by this point) to the same utcnow() used for closed_at, so both timestamps are consistent.
+- analyze.py: The [-1:] slice limited the scan census to only the newest rotated weekly log plus the current file — roughly 2 weeks of scan observations. With loguru retention='4 weeks' there are up to 4 rotated logs available; reading all of them multiplies the sample for feed-health frozen-bar percentages, gate admission rates, direction-bias counts, and contamination checks, all of which are accumulator statistics where every extra observation reduces noise. The overhead is a few extra sequential file reads once per nightly cycle.
+
+---
+
 ## v1.30.2 — 2026-08-17
 
 **Stats:** 12 trades · WR: 42% · P&L: -31.0%

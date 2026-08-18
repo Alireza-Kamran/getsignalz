@@ -831,6 +831,12 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
         d        = t.get("dir", 1)
         size     = abs(t.get("size") or 0)
         risk_px  = abs(entry_px - (t.get("sl_orig") or t.get("sl") or entry_px))
+        _closed_dt = datetime.utcnow()
+        _dur_h = 0.0
+        try:
+            _dur_h = (_closed_dt - datetime.fromisoformat(str(t.get("opened_at", "")).replace("Z", ""))).total_seconds() / 3600
+        except Exception:
+            pass
         state.setdefault("closed_trades", []).append({
             **t, "exit": exit_price, "result": result,
             "lev_pct": lev_pct, "max_adverse_pct": max_adverse,
@@ -840,7 +846,8 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
             "raw_pct": round(lev_pct / lev_used, 4) if lev_used else 0.0,
             "pnl_usd": round((exit_price - entry_px) * d * size, 2),
             "rr": round((exit_price - entry_px) * d / risk_px, 3) if risk_px else 0.0,
-            "closed_at": datetime.utcnow().isoformat(),
+            "duration_h": round(_dur_h, 2),
+            "closed_at": _closed_dt.isoformat(),
         })
 
     save_state(state)
