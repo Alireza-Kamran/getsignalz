@@ -320,8 +320,4 @@ python live.py
 
 Testnet. Not financial advice. · تست‌نت. این توصیه مالی نیست.
 
-**More by me** · [lbmgr](https://github.com/Alireza-Kamran/lbmgr) · [getsignalz](https://github.com/Alireza-Kamran/getsignalz) · [openvpn-tui-panel](https://github.com/Alireza-Kamran/openvpn-tui-panel)
-
-Built by [Alireza-Kamran](https://github.com/Alireza-Kamran) · 📍 Iran
-
 </sub></div>
