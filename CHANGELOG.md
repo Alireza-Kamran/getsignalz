@@ -251,6 +251,14 @@ the sizing working correctly.
 
 ---
 
+## v1.31.1 — 2026-08-20
+
+**Stats:** 16 trades · WR: 38% · P&L: -14.0%
+
+No changes — all parameters within target bounds.
+
+---
+
 ## v1.31.0 — 2026-08-18
 
 **Stats:** 12 trades · WR: 42% · P&L: -31.0%
