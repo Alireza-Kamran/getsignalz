@@ -721,7 +721,8 @@ def run():
                 s2_at_risk = sum(1 for c, t in _open_trades.items()
                                  if t.get("strategy") == "S2")
                 if s2_at_risk < strategy2.MAX_TRADES:
-                    s2_open = {**positions, **{c: {} for c in _open_trades}}
+                    s2_open = {**positions, **{c: {} for c in _open_trades},
+                               **{c: {} for c, exp in _cooldown_until.items() if int(time.time()) < exp}}
                     s2_best = strategy2.find_setup(s2_open)
                     # Logged even when empty: a scanner that only speaks when it
                     # fires is indistinguishable from a broken one, and this runs

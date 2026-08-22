@@ -529,7 +529,9 @@ def full_report():
         rsi_v, adx_v = sig.get("rsi"), sig.get("adx")
         stretch_v = _stretch_of(sig)
         for label in (
-            f"RSI {_band([15,20,23], rsi_v, ['<15','15-20','20-23','23-25'])}"
+            (f"RSI {_band([15,20,23], rsi_v, ['<15','15-20','20-23','23-25'])}"
+             if sig.get("direction", 1) == 1
+             else f"RSI {_band([77,80,85], rsi_v, ['75-77','77-80','80-85','85+'])}")
             if rsi_v is not None else None,
             f"ADX {_band([15,20], adx_v, ['<15','15-20','20-25'])}"
             if adx_v is not None else None,

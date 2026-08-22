@@ -251,6 +251,16 @@ the sizing working correctly.
 
 ---
 
+## v1.32.0 — 2026-08-22
+
+**Stats:** 16 trades · WR: 38% · P&L: -14.0%
+
+**Code improvements (2):**
+- live.py: S2 scanning bypassed the 3-hour post-SL cooldown that S1 already respects via already_open. A mean-reversion coin that is trending keeps printing extreme RSI readings after a stop-out and without this gate S2 can chain entries on the same coin in the same session, compounding losses on a directional move.
+- analyze.py: SHORT signals fire at overbought RSI (75-85); _band([15,20,23], 80, ...) returns the last label '23-25' for any value above 23, bucketing all SHORT entries alongside nearly-oversold LONG entries. Adding direction awareness routes overbought SHORTs to their own bands so the accumulating per-condition EV stats remain interpretable as n grows.
+
+---
+
 ## v1.31.1 — 2026-08-20
 
 **Stats:** 16 trades · WR: 38% · P&L: -14.0%
