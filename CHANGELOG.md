@@ -312,6 +312,15 @@ the sizing working correctly.
 
 ---
 
+## v1.34.0 — 2026-08-23
+
+**Stats:** 16 trades · WR: 38% · P&L: -14.0%
+
+**Code improvements (1):**
+- live.py: tracker.py's _loop() updates state['tracked'][coin]['peak_roe_pct'] and 'max_adverse_pct' every 60s, but _open_trades in live.py is a separate in-memory dict initialised once at trade open and never updated. Reading max_adverse from _open_trades therefore always returns 0.0 (the initialisation value), so the 'Max drawdown' line never appears in the owner DM. Reading _last from closed_trades before close_position appends the current trade means peak_roe_pct and max_drawdown_pct always contain the PREVIOUS trade's figures. Reading from tracker.load_state()['tracked'][coin] — which the tracker thread keeps current — before close_position removes the entry gives the correct per-trade values for all three fields.
+
+---
+
 ## v1.32.0 — 2026-08-22
 
 **Stats:** 16 trades · WR: 38% · P&L: -14.0%

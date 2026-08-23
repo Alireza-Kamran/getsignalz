@@ -444,18 +444,17 @@ def _check_closed(positions, account_val):
                     tracker.save_state(_s)
                 except Exception:
                     pass
-            max_adverse = t.get("max_adverse_pct", 0.0)
-            _st = tracker.load_state().get("closed_trades", [])
-            _last = _st[-1] if _st else {}
+            _pre_close = tracker.load_state().get("tracked", {}).get(coin, {})
             stats = tracker.close_position(coin, exit_px, hit, lev_pct, balance_before, balance_after)
 
             # Private DM to owner
             tg.dm_trade_close(coin, direction, entry, exit_px, lev_pct, hit,
                               balance_before, balance_after,
                               stats or tracker.load_state().get("stats", {}),
-                              max_adverse_pct=max_adverse, size=t.get("size", 0),
-                              max_drawdown_pct=_last.get("max_drawdown_pct"),
-                              peak_roe_pct=_last.get("peak_roe_pct"))
+                              max_adverse_pct=_pre_close.get("max_adverse_pct", 0.0),
+                              size=t.get("size", 0),
+                              max_drawdown_pct=_pre_close.get("max_drawdown_pct", 0.0),
+                              peak_roe_pct=_pre_close.get("peak_roe_pct", 0.0))
 
 
 def _post_scan(states, account_val, positions, hour_utc):
