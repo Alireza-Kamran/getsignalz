@@ -6,6 +6,67 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.33.0 — 2026-08-23 — THE BOT WAS GONE FOR 19 HOURS AND NOTHING SAID SO
+
+**Stats:** live n=16, WR 37.5%, sumR +0.44, meanR +0.027, EV +0.027R/trade, t=+0.08.
+One ETH SHORT open. No parameter changed — every S2 constant is owner-locked and n=16
+justifies moving none of them. Tonight's finding was operational.
+
+**THE OUTAGE.** The **host** was down 2026-08-21 22:02 → 08-22 17:50 UTC — **19h48m**.
+Confirmed three independent ways: bot.log candle continuity, a missing `selflearn.log`
+entry for 08-22 02:00, and `uptime` + `ExecMainStartTimestamp=2026-08-22 17:50:36` with
+**`NRestarts=0`** — systemd never saw a failure because the machine itself was gone. There
+is no nightly commit for 08-21 either; the same fact showing up in git.
+
+**The watchdog is not at fault and could never have caught it.** `live.py:_watchdog` is a
+liveness check living inside the thing whose liveness it checks. It died with the process.
+
+**What it cost.** An **ETH SHORT opened 08-21 22:01:46 — 76 seconds before the host died** —
+sat through the whole blackout. The resting exchange stop still protected it, so this was
+not naked risk, but the **ratchet was frozen for 19h48m** and the ratchet is where 100% of
+the measured edge lives. Still open at time of writing: entry $2607.83, stop $2684.36
+(2.93% = 1R), **MFE +2.20R**, currently ~+1.74R, **stop still at the original −1.00R**
+because TRAIL_START_R=2.5 was never reached.
+
+**FIXED (live.py) — on-disk heartbeat.** `.heartbeat` written from `_beat()` at most once
+per 60s, read at startup *before* the first beat overwrites it. Deliberately **its own file,
+not a `state.json` key**: routing it through `tracker.save_state` would widen exactly the
+non-atomic read-modify-write race that erased OP on 08-13. A restart after a 30s systemd
+bounce and a restart after a 19h blackout previously sent the owner a **byte-identical**
+"Bot started" line. Downtime ≥30 min now escalates and names every position that sat through
+the gap unmanaged. Verified across no-file / fresh-beat / 19h48m / 30s-bounce / corrupt-file.
+
+**ADDED (analyze.py) — AVAILABILITY, printed first.** Mines `━━━ Candle` lines from every bot
+log, excludes quiet hours (UTC 2–3), merges gaps *across* them so the blackout reads as one
+18h event rather than two 9h ones, and names any position open through a gap. Justification:
+the standing manual step "check candle continuity FIRST" **demonstrably failed** — the 08-22
+session ran after the outage ended, read a full report, shipped two improvements, and never
+noticed. A control that only works when someone remembers it is not a control. Over **827
+candles / 39 days it finds exactly 2 unexplained gaps** (this one and the known 07-28 socket
+freeze) with **no false positives**.
+
+**ADDED (analyze.py) — OPEN BOOK.** Every other section reads `closed_trades`, so the most
+important trade on record was invisible to the entire report while it was open. Prints live
+MFE/MAE and, when unarmed, exactly how far from arming the position is.
+
+**THE SHORT LEG OPENED.** First shorts ever: LONG 13 trades WR 46% sumR **+2.99R** vs SHORT
+3 trades WR 0% sumR **−2.55R** (DOGE −0.95, BNB −0.83, APT −0.78). Shorts gave back 85% of
+the long book's profit. But all three fired within two hours on 08-19 (15:01/16:01/17:01)
+into one market-wide pump — **one correlated event sampled three times, not n=3**.
+`MAX_TRADES=2` caps position *count*, not *correlation*; BNB and APT were concurrent and lost
+together. DOGE also traded on a **21.3% frozen feed** and was dead on arrival (MFE +0.00R,
+stopped in 4 minutes). The executor SL guard fired for the first time as a **clamp**, not an
+abort (APT: `SL clamped to 1.52% from fill`); the abort branch has still never fired.
+
+**Reported, not changed (owner-locked):** TRAIL_START_R=2.5 now has a live in-flight
+counterexample (ETH peaked +2.20R without arming — first trade to reach ≥2.0R and not arm);
+the short leg needs a decision rather than a tune; correlation is the uncapped risk; DOGE
+should leave the WATCHLIST; and host-level monitoring needs an external dead-man switch,
+because nothing on this box can alert *during* an outage.
+
+**Health:** `test_ratchet.py` 10/10, `test_exit_price.py` 5/5, standing `result=="tp"` grep
+clean (4 live sites, all backstop-first with P&L-sign fallbacks).
+
 ## v1.26.0 — 2026-08-04 — THE EXIT PARAMETERS WERE TUNED ON A MODEL LIVE CANNOT REPRODUCE
 
 **Stats:** live n=5 (BTC LONG closed 08-03 at +13.3% / +0.706R). WR 60%, meanR +0.156,

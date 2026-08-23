@@ -12,6 +12,8 @@ bot.log
 .review_msg_id
 .signal_count
 .night_report.json
+# Liveness timestamp for the cross-restart downtime detector (live.py)
+.heartbeat
 # Per-strategy runtime journals
 journal_s2.json
 

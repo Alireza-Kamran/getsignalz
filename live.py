@@ -59,12 +59,55 @@ _quiet_logged  = None   # date the quiet-hours notice was last logged
 _last_tick     = time.time()
 _tick_deadline = 900     # seconds of silence tolerated for an ordinary cycle
 
+# The watchdog above only covers a loop that stalls while the PROCESS survives.
+# On 2026-08-21 22:02 UTC the HOST went down and stayed down for 19h48m (uptime
+# and ExecMainStartTimestamp both put the return at 2026-08-22 17:50; NRestarts
+# was 0, so systemd never even saw a failure). An in-process watchdog cannot
+# report that -- it died with the process. An ETH SHORT opened 76 seconds before
+# the outage sat through all of it: the resting exchange stop still protected it,
+# but the ratchet, which is where this strategy's entire edge lives, was frozen.
+# The only thing that survives a host death is a timestamp on disk, so the beat
+# is persisted here and compared against the clock at the next startup.
+#
+# Deliberately its own file rather than a key in state.json: tracker.save_state
+# is a non-atomic read-modify-write (it silently erased OP on 2026-08-13), and
+# writing a heartbeat through it every cycle would widen exactly that race.
+HEARTBEAT_FILE = "/root/trade/.heartbeat"
+_last_beat_write = 0.0
+# 30 min: far above an ordinary systemd bounce (RestartSec=30) and the nightly
+# restart, far below the outage class this exists to catch. A nightly review
+# that blocks the loop longer than this and is then restarted will also trip it
+# -- correctly, because a blocked loop is not ratcheting either.
+DOWNTIME_ALERT_SEC = 1800
+
 
 def _beat(allowance=900):
     """Mark the main loop alive. Widen `allowance` around known-slow work."""
-    global _last_tick, _tick_deadline
+    global _last_tick, _tick_deadline, _last_beat_write
     _last_tick     = time.time()
     _tick_deadline = allowance
+    # Throttled: the loop beats every ~POLL seconds, the file needs far less.
+    if _last_tick - _last_beat_write >= 60:
+        _last_beat_write = _last_tick
+        try:
+            with open(HEARTBEAT_FILE, "w") as fh:
+                fh.write(str(int(_last_tick)))
+        except Exception:
+            pass      # never let bookkeeping break the trading loop
+
+
+def _downtime_since_last_beat():
+    """Seconds since the main loop last beat, or None if there is no record.
+
+    Measures 'how long was nothing managing the book', which is the question
+    that matters -- it does not distinguish a dead host from a dead process,
+    and should not, because the open positions cannot tell the difference.
+    """
+    try:
+        with open(HEARTBEAT_FILE) as fh:
+            return max(0.0, time.time() - float(fh.read().strip()))
+    except Exception:
+        return None
 
 
 def _watchdog():
@@ -486,6 +529,13 @@ def run():
     atexit.register(_release_lock)
     _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
 
+    # Read BEFORE the first _beat() overwrites the file. This is the only
+    # evidence a host-level outage leaves behind.
+    _downtime = _downtime_since_last_beat()
+    if _downtime is not None and _downtime >= DOWNTIME_ALERT_SEC:
+        logger.warning(f"Bot was not managing the book for "
+                       f"{_downtime/3600:.1f}h before this start")
+
     import threading
     threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
     logger.info("Watchdog armed — self-restart if the main loop stalls")
@@ -619,7 +669,40 @@ def run():
             logger.info(f"Restored cooldowns: {list(_cooldown_until.keys())}")
     except Exception as _e:
         logger.warning(f"Could not restore cooldowns: {_e}")
-    tg.dm_owner(f"⚡️ Bot started — {len(WATCHLIST)} pairs | restored {len(_open_trades)} open trades")
+    # A restart after a 30-second systemd bounce and a restart after a 19-hour
+    # host outage used to send the owner the byte-identical "Bot started" line,
+    # so the 2026-08-21 blackout was invisible until it was mined out of the
+    # candle timestamps four nights later. Say how long the book was unmanaged,
+    # and name the positions that sat through it.
+    if _downtime is None:
+        tg.dm_owner(f"⚡️ Bot started — {len(WATCHLIST)} pairs | "
+                    f"restored {len(_open_trades)} open trades")
+    elif _downtime < DOWNTIME_ALERT_SEC:
+        tg.dm_owner(f"⚡️ Bot started — {len(WATCHLIST)} pairs | "
+                    f"restored {len(_open_trades)} open trades | "
+                    f"gap {_downtime/60:.0f}m")
+    else:
+        _gap = (f"{_downtime/3600:.1f}h" if _downtime >= 3600
+                else f"{_downtime/60:.0f}m")
+        _lines = [f"🚨 Bot resumed after {_gap} with nothing managing the book.",
+                  "",
+                  "The in-process watchdog cannot catch this: it stops when the "
+                  "process or host does. Detected from the on-disk heartbeat.",
+                  ""]
+        if _open_trades:
+            _lines.append(f"⚠️ {len(_open_trades)} position(s) were open "
+                          f"throughout and got NO ratchet management for {_gap}:")
+            for _c, _t in _open_trades.items():
+                _side = "SHORT" if _t["dir"] == -1 else "LONG"
+                _lines.append(f"  • {_c} {_side} @ ${_t['entry']:.4f} "
+                              f"(stop ${_t['sl']:.4f})")
+            _lines.append("")
+            _lines.append("The resting exchange stop still protected them, but "
+                          "any favourable excursion during the gap could not be "
+                          "locked in. Check whether the trail should have armed.")
+        else:
+            _lines.append("No positions were open — scanning downtime only.")
+        tg.dm_owner("\n".join(_lines))
 
     last_candle = 0
 

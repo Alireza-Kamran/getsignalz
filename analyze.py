@@ -3,7 +3,7 @@ Performance analysis engine for the self-learn session.
 Produces clean statistics the agent uses to make strategy decisions.
 """
 import json, os, re, glob
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
 JOURNAL_F = "/root/trade/journal.json"
@@ -167,6 +167,101 @@ def _feed_staleness(per):
     return out
 
 
+# The bot prints one of these per hour, immediately after the quiet-hours gate,
+# so their presence is a direct record of "the main loop was alive and working".
+_CANDLE_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}):\d{2}:\d{2} \| INFO \| .*Candle ")
+
+# review.should_quiet(h) is `2 <= h < 4`, and the candle header is logged after
+# that gate, so UTC hours 2 and 3 are legitimately silent every day.
+QUIET_HOURS = {2, 3}
+
+
+def _availability(logs=None):
+    """Hours in which the bot logged a candle, and the gaps where it did not.
+
+    Added 2026-08-23 after the standing 'check bot.log candle continuity FIRST'
+    checklist step failed in practice: the host was down 2026-08-21 22:02 ->
+    08-22 17:50 (19h48m) and the 08-22 nightly session, which ran after the
+    outage had already ended, reported two unrelated improvements and never
+    noticed. A manual step that only works when someone remembers it is not a
+    control. An open ETH SHORT sat through the whole gap with its ratchet frozen.
+
+    Returns (seen_hours, gaps, window) where gaps is a list of
+    (start_dt, end_dt, n_missing_hours) covering only unexplained absences --
+    quiet hours are excluded, because they are supposed to be empty.
+    """
+    if logs is None:
+        logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
+    seen = set()
+    for path in logs:
+        try:
+            with open(path, errors="ignore") as fh:
+                for line in fh:
+                    m = _CANDLE_RE.match(line)
+                    if m:
+                        seen.add(datetime.strptime(f"{m.group(1)} {m.group(2)}",
+                                                   "%Y-%m-%d %H"))
+        except OSError:
+            continue
+    if not seen:
+        return set(), [], None
+    lo, hi = min(seen), max(seen)
+    missing, cur = [], lo
+    while cur <= hi:
+        if cur.hour not in QUIET_HOURS and cur not in seen:
+            missing.append(cur)
+        cur += timedelta(hours=1)
+    # Collapse consecutive missing hours into single gaps. A one-hour blip and a
+    # twenty-hour blackout are different events and must not be counted alike.
+    #
+    # Two missing hours separated only by quiet hours are still ONE outage: the
+    # 2026-08-21 blackout ran 08-21 23:00 -> 08-22 16:00 straight through the
+    # 02-03 quiet window, and splitting it there would report two ~9h gaps and
+    # understate the worst event on record.
+    def _only_quiet_between(a, b):
+        cur = a + timedelta(hours=1)
+        while cur < b:
+            if cur.hour not in QUIET_HOURS:
+                return False
+            cur += timedelta(hours=1)
+        return True
+
+    gaps = []
+    for ts in missing:
+        if gaps and _only_quiet_between(gaps[-1][1], ts):
+            gaps[-1][1] = ts
+            gaps[-1][2] += 1
+        else:
+            gaps.append([ts, ts, 1])
+    return seen, [(g[0], g[1], g[2]) for g in gaps], (lo, hi)
+
+
+def _open_during(gap_start, gap_end, state):
+    """Positions that were open across a downtime gap, from state.json.
+
+    This is the half that makes an availability gap actionable: scanning
+    downtime costs missed signals, but downtime with a live position costs
+    ratchet management on money already at risk.
+    """
+    out = []
+    for t in list(state.get("closed_trades", [])) + list(
+            state.get("tracked", {}).values()):
+        try:
+            op = datetime.fromisoformat(str(t["opened_at"]).replace("Z", ""))
+        except Exception:
+            continue
+        cl = t.get("closed_at")
+        try:
+            cl = datetime.fromisoformat(str(cl).replace("Z", "")) if cl else None
+        except Exception:
+            cl = None
+        if op <= gap_end and (cl is None or cl >= gap_start):
+            out.append((t.get("coin", "?"), "SHORT" if t.get("dir") == -1 else "LONG",
+                        cl is None))
+    return out
+
+
 # Last commit that touched an exit constant in strategy2.py (TP_R 3.0 -> 5.0,
 # TRAIL_START_R -> 2.50). Trades opened before this ran a materially different
 # exit and must not be pooled with the ones after it -- see _excursion_stats.
@@ -238,6 +333,75 @@ def full_report():
     lines.append("PERFORMANCE ANALYSIS REPORT")
     lines.append(f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     lines.append("=" * 60)
+
+    # ── Availability ───────────────────────────────────────────────
+    # Deliberately FIRST. Every other number in this report is conditional on
+    # the bot having been running, and on 2026-08-22 a session read a full
+    # report without noticing that the host had been dead for 19 of the
+    # previous 20 hours with a live position on the book.
+    try:
+        _seen, _gaps, _win = _availability()
+        lines.append(f"\n── AVAILABILITY (candle continuity) ──")
+        if _win:
+            _exp = int((_win[1] - _win[0]).total_seconds() // 3600) + 1
+            _quiet = sum(1 for i in range(_exp)
+                         if (_win[0] + timedelta(hours=i)).hour in QUIET_HOURS)
+            lines.append(f"  window: {_win[0]:%Y-%m-%d %H:%M} → {_win[1]:%Y-%m-%d %H:%M} UTC")
+            lines.append(f"  candles logged: {len(_seen)} of {_exp - _quiet} "
+                         f"expected ({_quiet} quiet hours excluded)")
+        if not _gaps:
+            lines.append("  no unexplained gaps ✓")
+        for _a, _b, _n in sorted(_gaps, key=lambda g: -g[2])[:5]:
+            _span = (_b - _a).total_seconds() / 3600 + 1
+            lines.append(f"  ⚠️  {_a:%Y-%m-%d %H:%M} → {_b:%Y-%m-%d %H:%M} UTC  "
+                         f"{_n}h missing (span {_span:.0f}h)")
+            for _c, _side, _still in _open_during(_a, _b, state):
+                lines.append(f"       ‼️  {_c} {_side} was OPEN and unmanaged "
+                             f"through this gap"
+                             + ("  (STILL OPEN)" if _still else ""))
+        lines.append("  (quiet hours 02:00-03:59 UTC are expected silent)")
+    except Exception as _e:
+        lines.append(f"\n── AVAILABILITY ──\n  availability check failed: {_e}")
+
+    # ── Open book ──────────────────────────────────────────────────
+    # Every other section reads closed_trades, so an open position is invisible
+    # to the entire report no matter how much it matters. On 2026-08-23 the most
+    # important trade on record -- the first SHORT ever to run favourably, which
+    # peaked at +2.20R against a 2.5R arming threshold -- was open, and could
+    # only be found by reading state.json by hand.
+    try:
+        import strategy2 as _s2o
+        _arm_r = float(_s2o.TRAIL_START_R)
+    except Exception:
+        _arm_r = 2.5
+    _tracked = state.get("tracked", {})
+    lines.append(f"\n── OPEN BOOK ({len(_tracked)}) ──")
+    if not _tracked:
+        lines.append("  flat")
+    for _c, _t in _tracked.items():
+        try:
+            _lev  = float(_t.get("leverage") or 1) or 1
+            _ent  = float(_t["entry"])
+            _stop = float(_t.get("sl_orig") or _t["sl"])
+            _risk = abs(_ent - _stop) / _ent * 100
+            _side = "SHORT" if _t.get("dir") == -1 else "LONG"
+            _mfe  = (float(_t.get("peak_roe_pct")    or 0.0) / _lev) / _risk
+            _mae  = (float(_t.get("max_adverse_pct") or 0.0) / _lev) / _risk
+            _age  = (datetime.utcnow() - datetime.fromisoformat(
+                str(_t["opened_at"]).replace("Z", ""))).total_seconds() / 3600
+            lines.append(f"  {_c} {_side} @ ${_ent:g}  stop ${_stop:g} "
+                         f"({_risk:.2f}% = 1R)  open {_age:.1f}h")
+            lines.append(f"    MFE {_mfe:+.2f}R   MAE {_mae:+.2f}R")
+            _locked = _t.get("locked_r")
+            if _locked:
+                lines.append(f"    ratchet ARMED, locked +{float(_locked):.2f}R")
+            else:
+                lines.append(f"    ratchet NOT armed — needs "
+                             f"{_arm_r:.2f}R, peaked {_mfe:+.2f}R "
+                             f"({_arm_r - _mfe:+.2f}R short); stop still "
+                             f"at -1.00R")
+        except Exception as _e:
+            lines.append(f"  {_c}: could not summarise ({_e})")
 
     # ── Overall stats ──────────────────────────────────────────────
     stats = state.get("stats", {})
