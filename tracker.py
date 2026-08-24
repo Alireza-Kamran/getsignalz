@@ -109,10 +109,8 @@ def _edit(msg_id, text):
                 print(f"[tracker] edit {msg_id} failed: {desc}")
             return
         except Exception as e:
-            if attempt < 2:
-                time.sleep(2)
-            else:
-                print(f"[tracker] edit {msg_id} error: {e}")
+            print(f"[tracker] edit {msg_id} error: {e}")
+            return
 
 
 def _pin(msg_id):

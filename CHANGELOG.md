@@ -88,6 +88,15 @@ the 08-21 outage.
 
 ---
 
+## v1.36.0 — 2026-08-24
+
+**Stats:** 16 trades · WR: 38% · P&L: -14.0%
+
+**Code improvements (1):**
+- tracker.py: Network timeouts (the failure mode in tonight's logs) block the tracker thread for up to 34 seconds per _edit call with no benefit — the tracker loop re-attempts the edit naturally on the next 60-second tick. Returning immediately on non-429 exceptions eliminates the dead wait while leaving the 429 rate-limit wait-and-retry path (the only case where retrying within the same call actually helps) completely untouched.
+
+---
+
 ## v1.34.0 — 2026-08-23
 
 **Stats:** 16 trades · WR: 38% · P&L: -14.0%
