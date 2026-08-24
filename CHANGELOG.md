@@ -6,6 +6,97 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.35.0 — 2026-08-24 — THE TEST SUITE WAS WRITING INTO PRODUCTION STATE
+
+**Stats:** live n=16, WR 37.5%, sumR +0.44, meanR +0.027, t=+0.08. One ETH SHORT open,
+52h, MFE +2.27R. No parameter changed — every S2 constant is owner-locked.
+
+**THE BUG.** `test_ratchet.py` was writing into the live `/root/trade/state.json`. It muted
+the loguru sink and stubbed `update_sl` and `tg.dm_owner` — but `_check_trail_s2` has a
+**third writer one level down**: `tracker.update_trail` → `save_state()` → the real state
+file. Every fixture trade in that suite is named **`"ETH"`**, the coin most likely to be
+open. It ran during the 08-23 02:00 session with the ETH short open and wrote its
+`entry=100 / R=1` ladder over that position's record: `sl` 2684.36 → **103.0**, `locked_r`
+0.0 → **3.0**, plus six fabricated "Trail +NR" activity lines.
+
+**Cost: no money, no naked risk — but the edge was switched off.** `update_sl` was stubbed,
+so no exchange order ever moved; `frontend_open_orders` confirmed the real stop resting at
+2684.4 and the TP at 2225.2 throughout. The damage: `_check_trail_s2`'s monotonic guard is
+`new_sl < t["sl"]` for a short and **nothing is below 103**, so every candidate stop failed
+`improves` and **the ratchet was dead on that position for 24 hours** — silently, no error.
+The ratchet is where 100% of the measured edge lives (original stop 10 trades meanR
+**−0.979** vs ratcheted 6 trades **+1.705**). And because `tracker._live_text` renders
+`activity[-4:]` into the position's **channel** message and the dashboard renders the
+`locked_r` badge, the public record advertised **"🔒+3R locked"** on a trade whose stop was
+still at −1.00R.
+
+**FIXED IN THREE LAYERS**, because one layer is what failed.
+
+1. **Prevention** (`test_ratchet.py`) — `tracker.STATE_F` is redirected to a temp file for
+   the run. Redirect the *resource*, don't stub the *caller*: stubbing call sites is
+   whack-a-mole and this bug **is** the third call site. New case 8 sha256-hashes the real
+   state.json before and after and fails the suite if a byte moves. **11/11 pass.**
+2. **Correction** (`live._reconcile_stop`, `executor.get_stop_price`) — on restore the
+   tracked stop is compared against the resting reduce-only stop on HL, which is the order
+   that will actually fire and is therefore right by definition. Disagreement beyond 0.5%
+   adopts the exchange price, re-derives `locked_r` from it, repairs state.json on disk and
+   DMs the owner. The 0.5% band absorbs trigger tick rounding (2684.3609 books as 2684.4).
+   Never raises — a restore that dies there would orphan the position, a strictly worse
+   failure. **Verified live:** the 02:07 restart logged `[ETH] tracked SL $103 disagrees
+   with the resting exchange stop $2684.4 — adopting the exchange price`; 02:08 was a clean
+   no-op.
+3. **Detection** (`analyze.py` OPEN BOOK) — asserts `locked_r ≤ MFE` and that the
+   **working** `sl` implies the recorded `locked_r`. The report read as a healthy armed
+   ratchet for two nights because it printed `sl_orig` (clean) and `locked_r` (corrupt) and
+   **never printed `sl`** (corrupt). *A report that only shows the fields you expect to be
+   right cannot catch the field that is wrong.*
+
+**THE SWEEP OVERRULED THE ANECDOTE.** ETH peaking at +2.27R and missing the 2.50R arm by
+0.23R reads as an argument for lowering `TRAIL_START_R`. `sweep_trail_mode.py` says the
+opposite at every bound — but its `tsr` grid was **hardcoded 0.50–1.50** and had silently
+stopped containing the live constant when it moved to 2.50 on 08-05, the *identical*
+stale-pin failure `test_ratchet.py` was fixed for on 08-19. The grid now derives from
+`s2.TRAIL_START_R` with an assert. Real prices, 92 trades, 20 coins, cap 2 — net acct % by
+(close / touch_opt / touch_pess):
+
+```
+1.00  +40.05 / +43.52 / +19.04       2.50  +55.05 / +62.67 / +41.69   <- live
+1.50  +39.34 / +61.28 / +37.11       3.00  +51.85 / +65.18 / +51.64
+2.00  +51.03 / +58.01 / +40.72
+```
+
+Model edge is far stronger than the live book: pessimistic bound t=2.56, out-of-sample
+n=58 EV +0.500%/trade, against live n=16 t=+0.08.
+
+**FOR KAMRAN (owner-locked — reported, not touched):**
+1. **`trail_gap_r = 0.25`** — forbidding the new stop from resting within 0.25R of price
+   improves **both** bounds at the deployed 2.50: touch_opt +62.67 → **+70.85**, touch_pess
+   +41.69 → **+48.11**, WR unchanged. It is the direct fix for the ratchet placing its stop
+   essentially *at market* (BTC 08-03 armed at +0.75R, filled 22s later at +0.706R). It
+   **hurts** at tsr=2.00, so it is specific to the deployed setting. Not implemented — it
+   would be a **new** exit parameter, i.e. deployed exit behaviour changed by the back door.
+2. **TRAIL_START_R 2.50 → 3.00** improves the pessimistic bound **+24%**. Only `close`
+   prefers 2.50, and `close` is the model the sweep exists to show is unrealistic.
+3. Items from 08-23 stand: short leg 0/3, correlation cap, DOGE 20.9% frozen, external
+   dead-man switch.
+
+**Health:** `test_ratchet.py` 11/11, `test_exit_price.py` 5/5, `py_compile` clean on every
+touched file. `trader.py` reformatted by `apply_config_to_trader()` (12-coin WATCHLIST onto
+one line — cosmetic, same coins, and the disabled S1 engine). Three clean restarts; ETH
+restored each time with stop and exchange in agreement. AVAILABILITY section clean since
+the 08-21 outage.
+
+---
+
+## v1.34.0 — 2026-08-23
+
+**Stats:** 16 trades · WR: 38% · P&L: -14.0%
+
+**Code improvements (1):**
+- live.py: tracker.py's _loop() updates state['tracked'][coin]['peak_roe_pct'] and 'max_adverse_pct' every 60s, but _open_trades in live.py is a separate in-memory dict initialised once at trade open and never updated. Reading max_adverse from _open_trades therefore always returns 0.0 (the initialisation value), so the 'Max drawdown' line never appears in the owner DM. Reading _last from closed_trades before close_position appends the current trade means peak_roe_pct and max_drawdown_pct always contain the PREVIOUS trade's figures. Reading from tracker.load_state()['tracked'][coin] — which the tracker thread keeps current — before close_position removes the entry gives the correct per-trade values for all three fields.
+
+---
+
 ## v1.33.0 — 2026-08-23 — THE BOT WAS GONE FOR 19 HOURS AND NOTHING SAID SO
 
 **Stats:** live n=16, WR 37.5%, sumR +0.44, meanR +0.027, EV +0.027R/trade, t=+0.08.
@@ -309,15 +400,6 @@ trades show no actionable gradient. Notably the 4.0+ ATR stretch bucket that the
 loss came from is the *best* one (+0.818%/trade), so that loss does not indict the entry
 filter — it lost exactly its 1R budget (-0.98% of account against 1.0% risked), which is
 the sizing working correctly.
-
----
-
-## v1.34.0 — 2026-08-23
-
-**Stats:** 16 trades · WR: 38% · P&L: -14.0%
-
-**Code improvements (1):**
-- live.py: tracker.py's _loop() updates state['tracked'][coin]['peak_roe_pct'] and 'max_adverse_pct' every 60s, but _open_trades in live.py is a separate in-memory dict initialised once at trade open and never updated. Reading max_adverse from _open_trades therefore always returns 0.0 (the initialisation value), so the 'Max drawdown' line never appears in the owner DM. Reading _last from closed_trades before close_position appends the current trade means peak_roe_pct and max_drawdown_pct always contain the PREVIOUS trade's figures. Reading from tracker.load_state()['tracked'][coin] — which the tracker thread keeps current — before close_position removes the entry gives the correct per-trade values for all three fields.
 
 ---
 

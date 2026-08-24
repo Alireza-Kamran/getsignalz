@@ -395,6 +395,26 @@ def full_report():
             _locked = _t.get("locked_r")
             if _locked:
                 lines.append(f"    ratchet ARMED, locked +{float(_locked):.2f}R")
+                # A stop cannot lock in more than the trade ever reached. When
+                # it claims to, the record is corrupt, not the trade -- and a
+                # corrupt sl is worse than a cosmetic error, because live.py's
+                # ratchet compares every candidate stop against it and a bad
+                # value freezes the ratchet silently for the life of the
+                # position. This section printed sl_orig and locked_r but never
+                # the working sl, which is why the 2026-08-23 corruption
+                # (sl 2684.36 -> 103.0, locked_r 0 -> 3.0, written by
+                # test_ratchet.py into the live state file) sat in the report
+                # for two nights reading as a healthy armed ratchet.
+                _live_sl = float(_t.get("sl") or _stop)
+                _impl    = (_live_sl - _ent) * (_t.get("dir") or 1) / abs(_ent - _stop)
+                if float(_locked) > _mfe + 0.10:
+                    lines.append(f"    ⚠️  IMPOSSIBLE: locked "
+                                 f"+{float(_locked):.2f}R exceeds MFE "
+                                 f"{_mfe:+.2f}R — record is corrupt")
+                if abs(_impl - float(_locked)) > 0.10:
+                    lines.append(f"    ⚠️  working stop ${_live_sl:g} implies "
+                                 f"{_impl:+.2f}R, not the recorded "
+                                 f"+{float(_locked):.2f}R — record is corrupt")
             else:
                 lines.append(f"    ratchet NOT armed — needs "
                              f"{_arm_r:.2f}R, peaked {_mfe:+.2f}R "

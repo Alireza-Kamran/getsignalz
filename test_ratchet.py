@@ -9,6 +9,9 @@ never executed live -- the only live trade so far stopped out before reaching
 Run: python3 test_ratchet.py
 """
 import sys
+import hashlib
+import os
+import tempfile
 sys.path.insert(0, "/root/trade")
 
 import live
@@ -19,6 +22,33 @@ import strategy2
 # trading log -- exactly what the 2026-07-29 watchdog test did. A later session
 # grepping bot.log cannot tell those from real events. Drop every sink first.
 live.logger.remove()
+
+# The log sink was not the only real resource this test reached. _check_trail_s2
+# has a THIRD writer below the two the test stubs: tracker.update_trail, which
+# read-modify-writes the real /root/trade/state.json. On 2026-08-23 this test
+# ran while a live ETH short was open and wrote its fake entry=100/R=1 ladder
+# straight over that position's record -- sl 2684.36 -> 103.0, locked_r 0 -> 3.0
+# -- which silently froze the live ratchet (the monotonic `improves` guard
+# compares each new stop against the stored sl, and nothing beats 103) and
+# published "locked +3R" to the public dashboard for a trade whose stop was
+# still sitting at -1R. Every trade below is named "ETH" precisely because that
+# is the coin most likely to be open.
+#
+# Stubbing the one caller would work until the next writer is added, so point
+# the underlying resource somewhere disposable instead. Verified by the
+# tamper check in main(), which fails the suite if state.json moves at all.
+REAL_STATE_F = live.tracker.STATE_F
+live.tracker.STATE_F = os.path.join(
+    tempfile.mkdtemp(prefix="test_ratchet_"), "state.json")
+
+
+def _state_fingerprint():
+    """Hash the real state.json so the suite can prove it never touched it."""
+    try:
+        with open(REAL_STATE_F, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except IOError:
+        return "absent"
 
 
 class FakeSL(object):
@@ -75,6 +105,7 @@ def main():
     start, step = strategy2.TRAIL_START_R, strategy2.TRAIL_STEP_R
     assert step == 0.25, "rung cases below encode a 0.25R step"
     ok = True
+    state_before = _state_fingerprint()
 
     # 1. Below the arming threshold the ratchet must not arm -- the original
     #    stop stays, and the resting take-profit must not be cancelled.
@@ -136,6 +167,15 @@ def main():
                 and "naked_alerted" not in t)
 
     live._open_trades.clear()
+
+    # 8. The suite must be inert with respect to live trading state. This is
+    #    checked last so it covers every case above, and it is a hash rather
+    #    than a spot-check of one field because the 08-23 corruption changed
+    #    three (sl, locked_r, activity) and any of them would have been enough.
+    ok &= check("live state.json untouched",
+                _state_fingerprint() == state_before,
+                REAL_STATE_F)
+
     print("\nALL PASS" if ok else "\nFAILURES PRESENT")
     return 0 if ok else 1
 

@@ -133,6 +133,40 @@ def get_positions():
     return positions
 
 
+def get_stop_price(coin):
+    """Return the trigger price of the resting reduce-only STOP for `coin`.
+
+    state.json records where the bot *believes* its stop is; this is where the
+    stop actually is, and only this one will execute. The two can drift apart --
+    a ratchet move that failed after the cancel leg, a manual intervention, or a
+    bad write into the state file -- and the bot has no other way to notice.
+
+    Stops are told apart from take-profits by order type rather than by which
+    side of entry they sit on: update_sl() uses the side rule, but that rule is
+    only valid before the ratchet arms. Once a stop has ratcheted into profit it
+    sits on the take-profit's side of entry and the side rule misreads it.
+
+    Returns None when there is no resting stop or the API call fails, so callers
+    must treat None as "unknown", never as "no stop".
+    """
+    info, _ = _clients()
+    try:
+        orders = _hl_call(info.frontend_open_orders, ACCOUNT_ADDRESS)
+    except Exception as e:
+        logger.warning(f"Could not read resting orders for {coin}: {e}")
+        return None
+    for o in orders or []:
+        if o.get("coin") != coin or not o.get("reduceOnly"):
+            continue
+        if "stop" not in str(o.get("orderType", "")).lower():
+            continue
+        try:
+            return float(o["triggerPx"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
 def get_mids():
     """Return all mid prices as a dict {coin: float}."""
     info, _ = _clients()

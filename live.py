@@ -10,7 +10,7 @@ from trader import (find_best_setup, quick_state, RISK_PCT, MAX_TRADES,
                     WATCHLIST, MIN_SCORE, TP_RATIO, TRAIL_R_STEP,
                     in_session, SESSION_START, SESSION_END)
 from executor import (get_account_value, get_positions, get_mids, open_trade,
-                      get_price, update_sl, get_close_fill)
+                      get_price, update_sl, get_close_fill, get_stop_price)
 from journal import log_signal, log_trade_open, log_trade_close
 from review  import (should_quiet, should_nightly_review, should_weekly_review,
                      nightly_review, weekly_review, version_push)
@@ -277,6 +277,55 @@ def _check_trail_s2(positions, mids=None):
             f"قیمت استاپ: <code>${new_sl:.5g}</code>\n"
             f"<i>از اینجا به بعد ضرر ممکن نیست</i>"
         )
+
+
+def _reconcile_stop(coin, restored, tracked):
+    """Correct a restored stop that disagrees with the one resting on HL.
+
+    state.json is only the bot's RECORD of where its stop is; the exchange holds
+    the order that will actually fire. Believing a stale record is not harmless.
+    _check_trail_s2's monotonic `improves` guard compares every candidate stop
+    against this number, so a single bad value freezes the ratchet for the whole
+    life of the position -- no error, no alert, just a trade that never locks in
+    a cent. That is exactly what happened on 2026-08-23: test_ratchet.py wrote
+    its fixture stop (sl=103.0, locked_r=3.0) over a live ETH short whose real
+    stop was 2684.4, and nothing in the system noticed for a day and a half.
+
+    The exchange price wins by definition. `locked_r` is then re-derived from it
+    rather than trusted, because whatever corrupted one field had every chance
+    to corrupt the other, and it is a pure function of entry/stop/R anyway.
+
+    A None from get_stop_price means "could not read", never "no stop", so it is
+    left alone. The 0.5% band absorbs the tick rounding update_sl applies when it
+    places a trigger (2684.3609 goes on the book as 2684.4) and is nowhere near
+    any disagreement worth acting on. Never raises: a restore that dies here
+    would orphan the position from the bot's own management, which is a strictly
+    worse failure than the one being guarded against.
+    """
+    try:
+        real_sl = get_stop_price(coin)
+        stale_sl = restored["sl"]
+        if not real_sl or abs(real_sl - stale_sl) <= 0.005 * real_sl:
+            return
+        logger.error(f"[{coin}] tracked SL ${stale_sl:.5g} disagrees with the "
+                     f"resting exchange stop ${real_sl:.5g} — adopting the "
+                     f"exchange price")
+        restored["sl"] = tracked["sl"] = real_sl
+        R = restored.get("R") or 0
+        locked = ((real_sl - restored["entry"]) * restored["dir"] / R) if R > 0 else 0.0
+        locked = max(0.0, round(locked, 2))
+        restored["locked_r"] = tracked["locked_r"] = locked
+        tg.dm_owner(
+            f"⚠️ اختلاف استاپ\n"
+            f"<b>{coin}</b>\n"
+            f"استاپ ثبت شده در ربات:\n"
+            f"<code>${stale_sl:.5g}</code>\n"
+            f"استاپ واقعی روی صرافی:\n"
+            f"<code>${real_sl:.5g}</code>\n"
+            f"قیمت صرافی مبنا قرار گرفت\n"
+            f"سود قفل شده: <b>+{locked:g}R</b>")
+    except Exception as e:
+        logger.warning(f"[{coin}] stop reconcile skipped: {e}")
 
 
 def _log_s2_close(coin, t, exit_px, lev_pct, hit, dur):
@@ -615,6 +664,7 @@ def run():
                         "locked_r":     t.get("locked_r", 0.0),
                         "R":            abs(hl["entry"] - (t.get("sl_orig") or t["sl"])),
                     }
+                    _reconcile_stop(coin, _open_trades[coin], t)
                     # Keep state.json in sync with HL actuals
                     t["entry"]    = hl["entry"]
                     t["size"]     = abs(hl["size"])
@@ -628,6 +678,13 @@ def run():
                         t["entry"]    = _open_trades[coin]["entry"]
                         t["size"]     = _open_trades[coin]["size"]
                         t["leverage"] = _open_trades[coin]["leverage"]
+                        # sl and locked_r too, so a stop reconciled against the
+                        # exchange above is repaired on disk rather than re-read
+                        # stale on the next restart -- and so the dashboard's
+                        # lock badge stops advertising a profit that is not
+                        # actually protected by any resting order.
+                        t["sl"]       = _open_trades[coin]["sl"]
+                        t["locked_r"] = _open_trades[coin]["locked_r"]
                 tracker.save_state(synced)
 
             # Detect positions that closed while bot was down

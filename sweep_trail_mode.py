@@ -193,9 +193,22 @@ if __name__ == "__main__":
         print(line)
 
     print()
+    # The grid has to CONTAIN the deployed value, or this table is sensitivity
+    # analysis for a system nobody is running. It was hardcoded 0.50-1.50, which
+    # silently stopped covering TRAIL_START_R the moment it went to 2.50 on
+    # 2026-08-05 -- the identical failure test_ratchet.py was fixed for on
+    # 2026-08-19, where pinned rung prices encoded an old threshold. Derive the
+    # range from the live constant so it cannot drift out from under it again.
+    live_tsr = s2.TRAIL_START_R
+    tsr_grid = sorted(set(round(live_tsr + k * 0.5, 2) for k in (-3, -2, -1, 0, 1))
+                      | {live_tsr})
+    tsr_grid = [g for g in tsr_grid if g >= 0.25]
+    assert live_tsr in tsr_grid, (live_tsr, tsr_grid)
+
     print("TRAIL_START_R sensitivity under each model (net acct %):")
+    print("  (live TRAIL_START_R = " + format(live_tsr, ".2f") + ")")
     print("  tsr    " + "".join(m.ljust(14) for m in MODES))
-    for tsr in (0.50, 0.75, 1.00, 1.25, 1.50):
+    for tsr in tsr_grid:
         cells = []
         for m in MODES:
             tr = simulate(bars_by_coin, cand, trail_start_r=tsr, mode=m)
@@ -204,7 +217,7 @@ if __name__ == "__main__":
 
     print()
     print("trail_gap_r -- forbid the stop from resting within gap R of price:")
-    for tsr in (0.75, 1.00):
+    for tsr in sorted({live_tsr, round(live_tsr - 0.5, 2)}):
         print("  TRAIL_START_R=" + format(tsr, ".2f"))
         for gap in (0.0, 0.125, 0.25, 0.375, 0.50):
             row = "    gap=" + format(gap, ".3f").ljust(8)
