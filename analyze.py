@@ -942,7 +942,7 @@ def _risk_control(journal, state):
     dd_pts = min(dd_pts, 15.0)
 
     trades = journal.get("trades", [])
-    breach = any(abs(t.get("lev_pct") or 0) > 26 for t in trades)
+    breach = any((t.get("lev_pct") or 0) < -26 for t in trades)
     breach_pts = 0.0 if breach else 5.0
 
     return round(dd_pts + breach_pts, 1), {"current_drawdown_pct": current_dd, "cap_breach": breach}

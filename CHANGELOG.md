@@ -88,6 +88,15 @@ the 08-21 outage.
 
 ---
 
+## v1.37.0 — 2026-08-25
+
+**Stats:** 17 trades · WR: 41% · P&L: +113.3%
+
+**Code improvements (1):**
+- analyze.py: The MAX_LEV_LOSS cap only limits losses, not gains. abs() incorrectly treats every large profitable trade (ETH +127.3%, AVAX +41.1%, SUI +31.8%) as a breach of the 25% loss cap, permanently zeroing the 5-point breach component even when risk management is functioning correctly. Restricting breach detection to negative outcomes means the indicator accurately reflects whether the loss-side safety mechanism has ever failed — which it has (OP -43.3% at 20x genuinely exceeded the 25% cap), so breach_pts stays 0 for the right reason rather than the wrong one.
+
+---
+
 ## v1.36.0 — 2026-08-24
 
 **Stats:** 16 trades · WR: 38% · P&L: -14.0%
