@@ -25,6 +25,33 @@ BASE_URL    = TESTNET_URL if USE_TESTNET else MAINNET_URL
 # socket read with no timer set. Never build an Info/Exchange without this.
 HTTP_TIMEOUT = (5, 20)
 
+# ── Stop-order slippage caps ──────────────────────────────────────────────────
+# A Hyperliquid trigger order with isMarket:True fires an IOC market order capped
+# at `limit_px`. The cap is the WORST price accepted; anything beyond it does not
+# fill and the remainder is cancelled -- it does NOT rest. So the cap trades one
+# risk against the other: too wide gives back profit to slippage, too tight risks
+# not closing at all and leaving the position with nothing resting against it.
+#
+# These two values were local variables in two different functions until
+# 2026-08-26, which is why nobody noticed they differ by 6.7x -- and that the
+# LOOSER one guards the order protecting 100% of this strategy's realised edge.
+#
+#   BRACKET_SLIP_CAP  the original protective stop placed at entry. Must fill:
+#                     failing to fill means riding an unbounded loss.
+#   RATCHET_SLIP_CAP  the stop update_sl() moves into profit once the ratchet
+#                     arms. Fires essentially AT market (the stop is placed at
+#                     the price that just triggered arming), so it is far more
+#                     exposed to an adverse tick than the bracket stop ever is.
+#
+# Measured cost at 2.0%: see the RATCHET SLIPPAGE section of analyze.full_report.
+# ETH 2026-08-25 armed at +2.50R and filled 24s later at +2.17R -- a 1.05%
+# adverse fill, comfortably inside this cap and therefore accepted in full.
+# Values are UNCHANGED from the locals they replace; narrowing RATCHET_SLIP_CAP
+# is a deployed exit-behaviour change and is Kamran's call, not the nightly
+# session's.
+BRACKET_SLIP_CAP = 0.003
+RATCHET_SLIP_CAP = 0.02
+
 # ── Singleton clients — one shared connection pool for the whole process ──────
 _info_obj     = None
 _exchange_obj = None
@@ -340,7 +367,7 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
     # Place SL order
     # LONG SL = SELL stop: limit must be BELOW trigger (accept selling into the drop)
     # SHORT SL = BUY stop: limit must be ABOVE trigger (accept buying into the rise)
-    slippage_buf = 0.003
+    slippage_buf = BRACKET_SLIP_CAP
     sl_trigger  = _px(sl_price)
     sl_limit_px = _px(sl_price * (1 - slippage_buf) if is_buy else sl_price * (1 + slippage_buf))
     sl_result = exchange.order(
@@ -449,7 +476,7 @@ def update_sl(coin, direction, sz, new_sl, entry=None):
     """
     info, exchange = _clients()
     is_buy = direction == -1  # short position → buy to close
-    buf    = 0.02
+    buf    = RATCHET_SLIP_CAP
 
     # Cancel old SL only — skip TP orders
     # open_orders does not include triggerPx; query each order individually to get it

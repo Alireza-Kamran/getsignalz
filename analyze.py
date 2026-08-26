@@ -316,6 +316,60 @@ def _excursion_stats(state):
     return out
 
 
+def _ratchet_slippage(state):
+    """How much of the profit the ratchet LOCKED was actually delivered.
+
+    `locked_r` is the R level update_sl() moved the stop to; `rr` is what the
+    trade realised. The two should be equal -- that is the whole promise of a
+    ratchet, and it is an invariant, not a statistic. Every R by which realised
+    falls short of locked is pure execution loss, and it lands exclusively on
+    winners, which is where this book's entire sumR lives.
+
+    Nothing measured this until 2026-08-26, and it is not visible in any metric
+    that already existed: EXIT MECHANISM pools ratcheted trades into one meanR,
+    and EXCURSION's "gave back" is MFE minus realised, which mixes execution
+    loss together with the ordinary retrace between the peak and the stop. Only
+    locked-vs-realised isolates the part that should be zero.
+
+    The mechanism is the ratchet placing its stop essentially AT market: it arms
+    at the moment price reaches TRAIL_START_R, so the new stop sits at the price
+    that just traded, and any adverse tick fires it immediately into an IOC
+    capped at executor.RATCHET_SLIP_CAP.
+
+    Trades that armed before `locked_r` began being recorded (2026-08-16) carry
+    no lock level and are reported as a named coverage gap rather than dropped
+    silently -- the same treatment OP gets in the excursion section, and for the
+    same reason: an unexplained absence reads as an absence of the problem.
+
+    Returns (measured, gap) where measured is
+    [{coin, opened, locked_r, real_r, slip_r}, ...] and gap is [(coin, opened,
+    real_r), ...] for ratcheted exits with no recorded lock.
+    """
+    measured, gap = [], []
+    for t in state.get("closed_trades", []):
+        try:
+            rr = t.get("rr")
+            if rr is None:
+                continue
+            rr = float(rr)
+            opened = str(t.get("opened_at", ""))[:10]
+            locked = t.get("locked_r")
+            if locked is None or float(locked) <= 0:
+                # A stop that filled in the trade's favour can only have got
+                # there by ratcheting; the original stop is always adverse.
+                if rr > 0:
+                    gap.append((t.get("coin", "?"), opened, rr))
+                continue
+            locked = float(locked)
+            measured.append({
+                "coin": t.get("coin", "?"), "opened": opened,
+                "locked_r": locked, "real_r": rr, "slip_r": locked - rr,
+            })
+        except (TypeError, ValueError):
+            continue
+    return measured, gap
+
+
 def full_report():
     """
     Produce a full performance report as a string.
@@ -581,6 +635,47 @@ def full_report():
         lines.append(f"  {k:<20} {es['n']:2} trades  sumR:{es['r']:+.2f}  "
                      f"meanR:{es['r']/es['n']:+.3f}")
 
+    # ── Ratchet slippage ───────────────────────────────────────────
+    # EXIT MECHANISM says ratcheted stops are profitable. This says how much of
+    # that profit never arrives. See _ratchet_slippage.
+    try:
+        _slip, _slip_gap = _ratchet_slippage(state)
+        if _slip or _slip_gap:
+            lines.append(f"\n── RATCHET SLIPPAGE (locked vs delivered) ──")
+        if _slip:
+            for x in sorted(_slip, key=lambda v: v["opened"]):
+                _pct = 100 * x["slip_r"] / x["locked_r"] if x["locked_r"] else 0.0
+                lines.append(
+                    f"  {x['coin']:<5} {x['opened']}  locked {x['locked_r']:+.2f}R"
+                    f"  ->  got {x['real_r']:+.3f}R"
+                    f"   leak {x['slip_r']:+.3f}R ({_pct:+.1f}% of lock)")
+            _tot  = sum(x["slip_r"] for x in _slip)
+            _lock = sum(x["locked_r"] for x in _slip)
+            lines.append(f"  n={len(_slip)}  total leak {_tot:+.3f}R of {_lock:.2f}R locked "
+                         f"({100*_tot/_lock:+.1f}%)  mean {_tot/len(_slip):+.3f}R/arm")
+            # Framed against the book, because that is the number that decides
+            # whether this is a rounding error or a first-order leak.
+            _book = sum(r for r in (_r_of(t) for t in trades) if r is not None)
+            if _book + _tot > 0:
+                lines.append(f"  book sumR {_book:+.2f}; without this leak {_book + _tot:+.2f} "
+                             f"— slippage is {100*_tot/(_book + _tot):.0f}% of gross")
+            try:
+                import executor as _ex
+                lines.append(f"  worst observed fill vs trigger sits inside the "
+                             f"{_ex.RATCHET_SLIP_CAP*100:.2f}% cap update_sl allows "
+                             f"(the entry bracket allows {_ex.BRACKET_SLIP_CAP*100:.2f}%)")
+            except Exception:
+                pass
+            lines.append("  NOTE: realised should EQUAL locked -- this is an invariant, not")
+            lines.append("  a statistic. Any leak is execution loss falling on winners only,")
+            lines.append("  because the ratchet arms AT market: the new stop rests at the")
+            lines.append("  price that just triggered it, so one adverse tick fires it.")
+        if _slip_gap:
+            lines.append("  no lock recorded (pre-2026-08-16, excluded above): "
+                         + ", ".join(f"{c} {o} {r:+.2f}R" for c, o, r in _slip_gap))
+    except Exception as _e:
+        lines.append(f"\n── RATCHET SLIPPAGE ──\n  slippage check failed: {_e}")
+
     # ── Excursion (MFE/MAE) ────────────────────────────────────────
     # The section above measures the exit. This one measures the entry, which
     # is the only way to tell the two apart. See _excursion_stats.
@@ -732,6 +827,29 @@ def full_report():
             lines.append(f"  {label:<16} n={bs['n']:2}  WR:{bs['w']/bs['n']*100:3.0f}%  "
                          f"meanR:{bs['r']/bs['n']:+.3f}")
         lines.append("  (n is far too small to act on; this is an accumulator)")
+        # These bands have implied "tighten the gate" for four sessions running
+        # (low-ADX and high-stretch cells carry the winners). That reading was
+        # TESTED on 2026-08-26 with portfolio2 -- the instrument that is valid
+        # for entry-side questions -- and REJECTED in both directions. 20 coins,
+        # 5000 1h bars, live exit params, net% / ex-top5%:
+        #     MAX_ADX   25(live) +49.18/+25.67   22 +17.92/-0.19
+        #               20        +6.04/ -9.26   18  +2.32/-6.38
+        #     stretch  1.5(live) +49.18/+25.67  2.5 +38.99/+15.97
+        #              3.0       +29.38/ +8.54  3.5 +16.21/-4.63
+        # Monotonic degradation both ways, and ex-top5 -- the edge with its five
+        # best trades deleted -- goes NEGATIVE at every tightening. The live gate
+        # is the only setting tested whose edge survives losing its tail.
+        #
+        # The bands disagree because they slice n<20 post-hoc and are conditioned
+        # on exactly the tail ex-top5 removes: "ADX 15-20 WR 100%" is three
+        # trades, against n=23 and ex-top5 -9.26% for the same cell in the sweep.
+        # Reproduce, do not trust these numbers as they age:
+        #   python3 -c "import portfolio2 as p;b,c=p.load();print(p.summarize(
+        #       p.simulate(b,c,max_adx=20,trail_start_r=2.5),'adx20'))"
+        lines.append("  CAUTION: the low-ADX / high-stretch cells look best because they")
+        lines.append("  hold the tail. portfolio2 swept both on 2026-08-26 and tightening")
+        lines.append("  either one degrades net, EV and t MONOTONICALLY, and drives ex-top5")
+        lines.append("  negative. Do not re-propose a tighter gate off this table alone.")
     else:
         lines.append("  (no trades joined to a signal)")
 
