@@ -6,6 +6,62 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.39.0 — 2026-08-27 — THE BOT WENT BLIND AND EVERY HEALTH CHECK SAID GREEN
+
+**Stats:** live n=17, WR 41.2%, sumR +2.61, meanR +0.153, t=+0.42. Book flat. No parameter
+changed — every S2 constant is owner-locked and the book is still not distinguishable from a
+coin flip.
+
+**THE INCIDENT.** At 02:00 UTC the last completed candle scan was **00:01** — two hours blind.
+257 ConnectTimeout warnings, 50 Cycle errors. Cause is **external**, confirmed independently:
+DNS resolves, Telegram and `1.1.1.1` connect in 0.16s, but all 8 A-records behind
+`api.hyperliquid.xyz` *and* `api.hyperliquid-testnet.xyz` sit in `99.86.171.0/24` and raw TCP to
+that entire /24 times out. One shared CloudFront edge PoP — mainnet and testnet both behind it,
+so there is no failover endpoint and retrying a different A-record cannot help.
+
+**A THIRD LIVENESS FAILURE MODE.** Neither existing guard covers it. `_watchdog()` watches
+`_last_tick` and the loop was ticking normally — cycle, raise, sleep, repeat. `.heartbeat` was
+fresh to the second. systemd said `active (running)`. All three green while the bot had not seen
+a price in two hours, because `get_positions()` raises at the *top* of the cycle before the
+candle check is reached, and **nothing measured whether a scan completed**. Liveness was measured
+on the loop, never on the loop's job. `tg.send_error()` did fire but dedups to
+`"upstream gateway error x25 in the last 30 min"` — noise, not "you are blind".
+
+**FIXED.** `live.py` tracks `_last_scan_ok`, set only on reaching the end of a full candle pass.
+`_check_scan_stale()` runs in the existing watchdog thread, DMs once per episode past
+`SCAN_STALE_ALERT_SEC = 8100` (2h15m — two consecutive misses, and clears the nightly review's
+~1h10m legitimate scan-free stretch), skips quiet hours, names any open position, warns the
+ratchet cannot arm, and DMs again on recovery. **Deliberately does not restart:** a restart
+cannot reach a dead API, and the trade-restore block needs `get_positions()` to succeed — when it
+does not, `_open_trades` stays permanently empty and any open position is orphaned from the bot's
+exit management for the life of that process. New `test_scan_stale.py`, 15 assertions, all pass.
+
+**CORRECTION — v1.38.0's cap recommendation was backwards.** That entry states ETH under a 0.3%
+cap "would have been capped at roughly +2.40R instead of +2.17R", implying ~+0.23R free from
+narrowing `RATCHET_SLIP_CAP`. **Wrong** — and it contradicts itself two sentences later: a
+Hyperliquid trigger with `isMarket:True` fires an IOC whose unfilled remainder is **CANCELLED,
+not rested**. An order that cannot fill inside its cap does not fill at a worse-but-capped price;
+**it does not fill at all.** ETH's adverse fill was **1.047% of price**, so at 0.30% that stop
+would not have executed — and `update_sl` cancels the old stop *and* the TP before placing the
+new one. The real trade is 0.33R against an unprotected short mid-move.
+→ **Do not narrow `RATCHET_SLIP_CAP` to 0.30%.** Owner call; values unchanged.
+
+**WHY IT WAS INVISIBLE: a unit mismatch.** The leak was reported only in **R** — right for edge
+(normalises across coins), wrong for an execution cap enforced as a **fraction of price**, and
+R/entry differs 3.6x across these trades (SOL 0.81%, SUI 1.30%, ETH 2.93%). The old line said the
+worst fill "sits inside the 2.00% cap" without ever printing what it was.
+`analyze._ratchet_slippage` now returns `adv_pct` per arm; the report prints fill-vs-trigger in
+percent, the worst fill as a share of the cap, and names any arm a tightened cap would have
+failed to fill.
+
+**THE LEAK IS ONE BAD FILL, NOT A BROAD TAX.** New concentration line: **ETH 2026-08-21 alone is
+80% of the 0.414R leak.** Adverse fills: SOL **0.019%**, SUI **0.074%**, ETH **1.047%** — the two
+longs cost essentially nothing, the one SHORT cost 14x the worst long. Hypothesis, n=1, not acted
+on: a short's ratchet stop is a BUY, and buying into a squeeze is where slippage lives.
+
+**Known limitation:** `_last_scan_ok` initialises at import, so a restart resets the blind-clock
+and an outage spanning the nightly restart is re-alerted only after another 2h15m.
+
 ## v1.35.0 — 2026-08-24 — THE TEST SUITE WAS WRITING INTO PRODUCTION STATE
 
 **Stats:** live n=16, WR 37.5%, sumR +0.44, meanR +0.027, t=+0.08. One ETH SHORT open,

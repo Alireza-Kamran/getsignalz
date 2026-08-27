@@ -80,6 +80,95 @@ _last_beat_write = 0.0
 # -- correctly, because a blocked loop is not ratcheting either.
 DOWNTIME_ALERT_SEC = 1800
 
+# The two mechanisms above cover a stalled loop and a dead host. Neither covers
+# the third way this bot goes blind, observed 2026-08-27 00:01-02:00+ UTC: the
+# loop cycles normally, _beat() fires every pass, the heartbeat file stays
+# fresh and systemd reports active -- but every Hyperliquid call times out, so
+# get_positions() raises before the candle check is ever reached and NO SCAN
+# COMPLETES. Every liveness signal the bot has says healthy while it is in fact
+# not looking at the market at all. (Root cause that night was external: the
+# whole 99.86.171.0/24 CloudFront edge serving both api.hyperliquid.xyz and
+# api.hyperliquid-testnet.xyz was unreachable from this host for hours, while
+# the rest of the internet resolved and connected fine.)
+#
+# tg.send_error() does fire on the Cycle error, but it collapses to
+# "upstream gateway error x25 in the last 30 min" -- which reads as transient
+# noise, not as "you have not seen a price in two hours". Hence a separate,
+# explicitly-worded alert keyed on the thing that actually matters: time since
+# a scan last COMPLETED, not time since the loop last ran.
+#
+# Deliberately does NOT restart the process. A restart cannot fix an unreachable
+# API, and restarting into one is actively worse: the trade-restore block in
+# run() needs get_positions() to succeed, and when it does not, _open_trades
+# stays permanently empty and any open position is orphaned from the bot's own
+# trailing/exit management for the life of that process. Alert, keep cycling,
+# recover when the API does.
+#
+# 2h15m: scans are hourly, so this needs two consecutive misses to trip. It
+# must also clear the longest legitimate scan-free stretch, which is the
+# nightly review (ai_brain runs to BRAIN_TIMEOUT=3600s, ~1h10m with its cycle);
+# quiet hours are excluded separately below rather than budgeted for here.
+SCAN_STALE_ALERT_SEC = 8100
+_last_scan_ok  = time.time()
+_scan_alerted  = False
+
+
+def _mark_scan_ok():
+    """Record that a candle scan ran to completion. Clears any blind alert."""
+    global _last_scan_ok, _scan_alerted
+    _last_scan_ok = time.time()
+    if _scan_alerted:
+        _scan_alerted = False
+        try:
+            tg.dm_owner("✅ <b>Scanning recovered</b> — a candle scan completed. "
+                        "The bot is reading the market again.")
+        except Exception:
+            pass
+        logger.info("Scanning recovered — candle scan completed after blind period")
+
+
+def _check_scan_stale():
+    """Alert once per episode if no scan has completed in SCAN_STALE_ALERT_SEC.
+
+    Skipped during quiet hours, when not scanning is the intended behaviour.
+    """
+    global _scan_alerted
+    if _scan_alerted:
+        return
+    if should_quiet(datetime.now(timezone.utc).hour):
+        return
+    stale = time.time() - _last_scan_ok
+    if stale <= SCAN_STALE_ALERT_SEC:
+        return
+
+    _scan_alerted = True
+    hrs = stale / 3600
+    lines = [f"🚨 <b>Bot is blind</b> — no candle scan has completed in "
+             f"{hrs:.1f}h (limit {SCAN_STALE_ALERT_SEC/3600:.1f}h).",
+             "",
+             "The process is alive and the loop is cycling, so the watchdog and "
+             "the heartbeat both read healthy. Scanning is what stopped — "
+             "usually every exchange API call failing.",
+             ""]
+    if _open_trades:
+        lines.append(f"⚠️ {len(_open_trades)} position(s) OPEN and unmanaged: "
+                     f"{', '.join(_open_trades)}")
+        lines.append("The resting exchange stop still protects them, but the "
+                     "ratchet cannot arm or advance while this lasts.")
+    else:
+        lines.append("Book is flat — scanning downtime only, no position at risk.")
+    lines.append("")
+    lines.append("Not restarting: a restart cannot reach a dead API and risks "
+                 "orphaning open positions from the bot's exit management.")
+    try:
+        logger.error(f"Bot blind: no scan completed in {hrs:.1f}h")
+    except Exception:
+        pass
+    try:
+        tg.dm_owner("\n".join(lines))
+    except Exception:
+        pass
+
 
 def _beat(allowance=900):
     """Mark the main loop alive. Widen `allowance` around known-slow work."""
@@ -114,6 +203,13 @@ def _watchdog():
     import os
     while True:
         time.sleep(60)
+        # Blind-bot check first: it is the failure mode the stall check below
+        # cannot see, because a loop erroring every pass still ticks normally.
+        # Never allowed to break the stall check that follows it.
+        try:
+            _check_scan_stale()
+        except Exception:
+            pass
         stale = time.time() - _last_tick
         if stale <= _tick_deadline:
             continue
@@ -895,7 +991,8 @@ def run():
                         log_signal(c2, dir2, 0, reasons2, s2_best["entry"],
                                    s2_best["sl"], s2_best["tp"], strategy2.TF,
                                    adx=s2_best["adx"], rsi=s2_best["rsi"],
-                                   ssl=None, session_hour=h)
+                                   ssl=None, session_hour=h,
+                                   stretch=s2_best.get("stretch"))
                         sig2, sig2_mid = tg.send_signal(
                             coin=c2, direction=dir2, score=0, price=s2_best["entry"],
                             sl=s2_best["sl"], tp=s2_best["tp"], reasons=reasons2,
@@ -1024,6 +1121,11 @@ def run():
             elif not S1_ENABLED:
                 logger.info("Strategy 1 disabled — mean-reversion only")
 
+            # Reaching here means a full candle was scanned: every earlier exit
+            # from this block is a `continue` (quiet hours, same candle) and
+            # every failure is an exception. This is the only signal that
+            # distinguishes "cycling" from "actually looking at the market".
+            _mark_scan_ok()
 
         except KeyboardInterrupt:
             logger.info("Bot stopped")

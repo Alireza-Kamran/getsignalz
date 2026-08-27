@@ -341,9 +341,18 @@ def _ratchet_slippage(state):
     silently -- the same treatment OP gets in the excursion section, and for the
     same reason: an unexplained absence reads as an absence of the problem.
 
+    `adv_pct` is the same loss expressed as a fraction of price, and it is the
+    only unit in which the cap question can actually be answered: R normalises
+    across coins (which is why it is right for edge), but RATCHET_SLIP_CAP is
+    enforced as a fraction of price, and the conversion factor R/entry differs
+    per trade -- 0.81% for SOL, 2.93% for ETH. Reporting the leak only in R and
+    then remarking that it "sits inside the cap" invites the conclusion that the
+    cap is the culprit, without ever printing the number that would test it.
+    None when the trade lacks the prices to compute it.
+
     Returns (measured, gap) where measured is
-    [{coin, opened, locked_r, real_r, slip_r}, ...] and gap is [(coin, opened,
-    real_r), ...] for ratcheted exits with no recorded lock.
+    [{coin, opened, locked_r, real_r, slip_r, adv_pct}, ...] and gap is
+    [(coin, opened, real_r), ...] for ratcheted exits with no recorded lock.
     """
     measured, gap = [], []
     for t in state.get("closed_trades", []):
@@ -361,9 +370,21 @@ def _ratchet_slippage(state):
                     gap.append((t.get("coin", "?"), opened, rr))
                 continue
             locked = float(locked)
+
+            # Adverse fill vs the ratcheted trigger, signed so that positive
+            # always means "filled worse than the stop asked for".
+            adv_pct = None
+            try:
+                trig, fill, d = float(t["sl"]), float(t["exit"]), int(t["dir"])
+                if trig > 0:
+                    adv_pct = ((trig - fill) if d == 1 else (fill - trig)) / trig
+            except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                adv_pct = None
+
             measured.append({
                 "coin": t.get("coin", "?"), "opened": opened,
                 "locked_r": locked, "real_r": rr, "slip_r": locked - rr,
+                "adv_pct": adv_pct,
             })
         except (TypeError, ValueError):
             continue
@@ -645,25 +666,65 @@ def full_report():
         if _slip:
             for x in sorted(_slip, key=lambda v: v["opened"]):
                 _pct = 100 * x["slip_r"] / x["locked_r"] if x["locked_r"] else 0.0
+                _adv = ("  fill %+.3f%% vs trigger" % (100 * x["adv_pct"])
+                        if x["adv_pct"] is not None else "  fill n/a")
                 lines.append(
                     f"  {x['coin']:<5} {x['opened']}  locked {x['locked_r']:+.2f}R"
                     f"  ->  got {x['real_r']:+.3f}R"
-                    f"   leak {x['slip_r']:+.3f}R ({_pct:+.1f}% of lock)")
+                    f"   leak {x['slip_r']:+.3f}R ({_pct:+.1f}% of lock)"
+                    f"{_adv}")
             _tot  = sum(x["slip_r"] for x in _slip)
             _lock = sum(x["locked_r"] for x in _slip)
             lines.append(f"  n={len(_slip)}  total leak {_tot:+.3f}R of {_lock:.2f}R locked "
                          f"({100*_tot/_lock:+.1f}%)  mean {_tot/len(_slip):+.3f}R/arm")
+            # Concentration check. A mean over 3 arms hides whether this is a
+            # broad tax or one bad fill, and those have different fixes.
+            _worst_arm = max(_slip, key=lambda v: v["slip_r"])
+            if _tot > 0:
+                lines.append(f"  concentration: {_worst_arm['coin']} "
+                             f"{_worst_arm['opened']} alone is "
+                             f"{100*_worst_arm['slip_r']/_tot:.0f}% of the leak "
+                             f"— this is one bad fill, not a broad tax")
             # Framed against the book, because that is the number that decides
             # whether this is a rounding error or a first-order leak.
             _book = sum(r for r in (_r_of(t) for t in trades) if r is not None)
             if _book + _tot > 0:
                 lines.append(f"  book sumR {_book:+.2f}; without this leak {_book + _tot:+.2f} "
                              f"— slippage is {100*_tot/(_book + _tot):.0f}% of gross")
+            # The cap verdict, stated in the cap's own unit. Without this the
+            # obvious-looking fix (narrow RATCHET_SLIP_CAP to match the entry
+            # bracket) reads as free money; it is not, and the number says why.
             try:
                 import executor as _ex
-                lines.append(f"  worst observed fill vs trigger sits inside the "
-                             f"{_ex.RATCHET_SLIP_CAP*100:.2f}% cap update_sl allows "
-                             f"(the entry bracket allows {_ex.BRACKET_SLIP_CAP*100:.2f}%)")
+                _advs = [x["adv_pct"] for x in _slip if x["adv_pct"] is not None]
+                if _advs:
+                    _worst = max(_advs)
+                    lines.append(f"  worst fill {_worst*100:.3f}% vs trigger — "
+                                 f"{100*_worst/_ex.RATCHET_SLIP_CAP:.0f}% of the "
+                                 f"{_ex.RATCHET_SLIP_CAP*100:.2f}% RATCHET_SLIP_CAP")
+                    _would_miss = [x for x in _slip
+                                   if x["adv_pct"] is not None
+                                   and x["adv_pct"] > _ex.BRACKET_SLIP_CAP]
+                    if _would_miss:
+                        lines.append(
+                            f"  ⚠️  narrowing the cap to the entry bracket's "
+                            f"{_ex.BRACKET_SLIP_CAP*100:.2f}% would NOT have filled: "
+                            + ", ".join(f"{x['coin']} {x['opened']}" for x in _would_miss)
+                            + " — update_sl cancels the old stop AND the TP before")
+                        lines.append(
+                            "      placing the new one, so a rejected fill leaves the "
+                            "position with nothing resting against it. Tightening this")
+                        lines.append(
+                            "      cap buys back fractions of an R by risking an "
+                            "unprotected position. Not a free win.")
+                    else:
+                        lines.append(f"  every observed fill is inside the entry "
+                                     f"bracket's {_ex.BRACKET_SLIP_CAP*100:.2f}% — "
+                                     f"no evidence the cap is binding at all")
+                else:
+                    lines.append(f"  cap {_ex.RATCHET_SLIP_CAP*100:.2f}% "
+                                 f"(entry bracket {_ex.BRACKET_SLIP_CAP*100:.2f}%) "
+                                 f"— no fill prices recorded to compare")
             except Exception:
                 pass
             lines.append("  NOTE: realised should EQUAL locked -- this is an invariant, not")
