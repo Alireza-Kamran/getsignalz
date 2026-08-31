@@ -3,7 +3,7 @@ Live engine — scans 15 coins every 1h candle, fires on best setup.
 Includes: session filter, regime filter, trail stop, nightly/weekly review, trade journal.
 """
 import time, sys, json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from loguru import logger
 
 from trader import (find_best_setup, quick_state, RISK_PCT, MAX_TRADES,
@@ -127,17 +127,50 @@ def _mark_scan_ok():
         logger.info("Scanning recovered — candle scan completed after blind period")
 
 
+def _unscheduled_stale_seconds(t0, t1):
+    """Scan-free seconds in [t0, t1] during which scanning was actually due.
+
+    Quiet hours are a *scheduled* scan-free window, so counting them as
+    staleness makes the detector report the schedule as an outage: with the
+    last scan at 01:00 and the next due at 04:00, plain wall-clock staleness
+    reads 3.0h against a 2.25h limit and fires every single night. Observed
+    2026-08-28/29/30 -- a 🚨 DM followed by a ✅ recovery DM 56s later.
+
+    The quiet window is derived from `should_quiet()` rather than re-stating
+    2-4 here: this detector exists because a real outage was missed, and a
+    threshold that drifts away from the gate it is supposed to model is how
+    that happens again.
+    """
+    if t1 <= t0:
+        return 0.0
+    quiet = 0.0
+    cur = datetime.fromtimestamp(t0, tz=timezone.utc).replace(
+        minute=0, second=0, microsecond=0)
+    while cur.timestamp() < t1:
+        nxt = cur + timedelta(hours=1)
+        if should_quiet(cur.hour):
+            quiet += max(0.0, min(t1, nxt.timestamp()) - max(t0, cur.timestamp()))
+        cur = nxt
+    return (t1 - t0) - quiet
+
+
 def _check_scan_stale():
     """Alert once per episode if no scan has completed in SCAN_STALE_ALERT_SEC.
 
-    Skipped during quiet hours, when not scanning is the intended behaviour.
+    Skipped during quiet hours, when not scanning is the intended behaviour,
+    and quiet time is discounted from the staleness clock itself so the
+    scheduled pause cannot age into a false alarm at 04:00.
     """
     global _scan_alerted
     if _scan_alerted:
         return
-    if should_quiet(datetime.now(timezone.utc).hour):
+    # One clock read for both the gate and the arithmetic: reading the hour
+    # from datetime.now() and the elapsed time from time.time() is two sources
+    # that can disagree across a boundary, and it made this untestable.
+    now = time.time()
+    if should_quiet(datetime.fromtimestamp(now, tz=timezone.utc).hour):
         return
-    stale = time.time() - _last_scan_ok
+    stale = _unscheduled_stale_seconds(_last_scan_ok, now)
     if stale <= SCAN_STALE_ALERT_SEC:
         return
 
@@ -944,6 +977,16 @@ def run():
                                 f"ADX {s['adx']:.0f}  SSL {s['ssl']:+d}{score_tag}")
             # Scan summary stays in logs only — no channel post
 
+            # Liveness is marked HERE, on the first real market read of the
+            # candle, and gated on `states` so it means "prices were actually
+            # returned" rather than "the loop got this far". Marking it further
+            # down instead let the off-session `continue` below (00:00-11:00
+            # UTC) starve the clock for 11h a night, which alerted at 01:17 and
+            # "recovered" at 11:01 on 08-28 and 08-29 — and delayed the REAL
+            # 08-27 recovery notice by ~9h.
+            if states:
+                _mark_scan_ok()
+
             # ── Strategy 2: mean reversion (live, official) ───────────────────
             # Runs on its own risk budget and its own watchlist/timeframe, so it
             # neither blocks nor is blocked by the structural system below.
@@ -1121,10 +1164,10 @@ def run():
             elif not S1_ENABLED:
                 logger.info("Strategy 1 disabled — mean-reversion only")
 
-            # Reaching here means a full candle was scanned: every earlier exit
-            # from this block is a `continue` (quiet hours, same candle) and
-            # every failure is an exception. This is the only signal that
-            # distinguishes "cycling" from "actually looking at the market".
+            # Redundant with the mark after the scan loop above (this line is
+            # unreachable off-session, which is exactly why it could not be the
+            # only one). Kept because reaching here is a strictly stronger
+            # statement: the full candle, both engines, ran without raising.
             _mark_scan_ok()
 
         except KeyboardInterrupt:

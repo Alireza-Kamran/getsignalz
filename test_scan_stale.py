@@ -98,6 +98,85 @@ try:
 except Exception as e:
     check(f"swallowed (raised {e})", False)
 
+
+# ── Scheduled scan-free windows must not age into alerts ────────────────────
+# Cases 9-12 lock the 2026-08-31 regression: the detector counted quiet hours
+# and the off-session `continue` as staleness, so it cried wolf every night.
+from datetime import datetime, timezone
+
+import review
+
+live.tg.dm_owner = lambda m: sent.append(m)  # case 8 left this raising
+live.should_quiet = review.should_quiet      # the real 02:00-04:00 UTC gate
+_real_time = live.time
+
+
+class _FakeTime:
+    """Only `live`'s own time lookups are redirected; the module is restored."""
+
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+    def sleep(self, _s):
+        pass
+
+
+def at(y, mo, d, h, mi, s=0):
+    return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc).timestamp()
+
+
+print("9. quiet-hours discount is exact")
+span = live._unscheduled_stale_seconds(at(2026, 8, 30, 1, 0), at(2026, 8, 30, 4, 30))
+check(f"3.5h span minus 2h quiet = 1.5h (got {span/3600:.3f}h)", abs(span - 5400) < 1)
+none = live._unscheduled_stale_seconds(at(2026, 8, 30, 2, 10), at(2026, 8, 30, 3, 50))
+check(f"fully inside quiet -> 0 (got {none:.0f}s)", abs(none) < 1)
+plain = live._unscheduled_stale_seconds(at(2026, 8, 30, 12, 0), at(2026, 8, 30, 15, 0))
+check(f"no quiet overlap -> unchanged (got {plain/3600:.2f}h)", abs(plain - 10800) < 1)
+check("reversed window -> 0", live._unscheduled_stale_seconds(at(2026, 8, 30, 5, 0),
+                                                              at(2026, 8, 30, 4, 0)) == 0.0)
+
+print("10. the nightly 04:00 false alarm is gone")
+# Exactly the 2026-08-30 log: scanned 01:00:20, checked 04:00:46, raw stale 3.0h.
+try:
+    live.time = _FakeTime(at(2026, 8, 30, 4, 0, 46))
+    sent.clear()
+    live._scan_alerted = False
+    live._open_trades = {}
+    live._last_scan_ok = at(2026, 8, 30, 1, 0, 20)
+    raw = (at(2026, 8, 30, 4, 0, 46) - live._last_scan_ok)
+    check(f"raw stale really does exceed the limit ({raw/3600:.2f}h)",
+          raw > live.SCAN_STALE_ALERT_SEC)
+    live._check_scan_stale()
+    check("no DM after discounting quiet hours", not sent)
+    check("not latched", live._scan_alerted is False)
+
+    print("11. a REAL outage spanning quiet hours still alerts")
+    # 2026-08-27: last scan 00:01, API dead through the morning.
+    live.time = _FakeTime(at(2026, 8, 27, 4, 30))
+    sent.clear()
+    live._scan_alerted = False
+    live._last_scan_ok = at(2026, 8, 27, 0, 1)
+    live._check_scan_stale()
+    check("one DM", len(sent) == 1)
+    check("says blind", sent and "blind" in sent[0].lower())
+finally:
+    live.time = _real_time
+
+print("12. the scan marker sits ABOVE the off-session gate in run()")
+# Source-order check, not a behavioural one: the bug was that `_mark_scan_ok()`
+# lived only below `if not in_session(h): continue`, which returns to the top of
+# the loop for 11h a night (00:00-11:00 UTC). No amount of stubbing catches an
+# ordering mistake, so assert the ordering.
+src = open("/root/trade/live.py").read()
+i_mark = src.find("if states:\n                _mark_scan_ok()")
+i_gate = src.find("if not in_session(h):")
+check("marker present after the scan loop", i_mark != -1)
+check("session gate present", i_gate != -1)
+check("marker precedes the off-session continue", -1 < i_mark < i_gate)
+
 print()
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)
