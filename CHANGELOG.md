@@ -144,6 +144,15 @@ the 08-21 outage.
 
 ---
 
+## v1.41.0 — 2026-08-31
+
+**Stats:** 17 trades · WR: 41% · P&L: +113.3%
+
+**Code improvements (1):**
+- live.py: The cooldown exists to avoid re-entering a coin whose market just moved against us. But S2 cancels the TP when the ratchet arms, so every S2 exit — winners included — arrives with hit='sl'. The branch only checked hit=='sl', not whether the trade was actually a loss, so it fired after every profitable trail exit. Adding `and lev_pct < 0` restricts cooldowns to genuine losses; coins that close profitable are immediately available for re-entry, which is correct behavior given the measured entry frequency.
+
+---
+
 ## v1.40.1 — 2026-08-30
 
 **Stats:** 17 trades · WR: 41% · P&L: +113.3%

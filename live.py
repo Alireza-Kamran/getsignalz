@@ -613,7 +613,7 @@ def _check_closed(positions, account_val):
             logger.info(f"{tag}CLOSED {coin} | "
                         f"{'+' if lev_pct>0 else ''}{lev_pct:.1f}% | {hit.upper()}")
             log_trade_close(coin, exit_px, hit, lev_pct, dur)
-            if hit == "sl":
+            if hit == "sl" and lev_pct < 0:
                 _expiry = int(time.time()) + 10800
                 _cooldown_until[coin] = _expiry
                 try:
