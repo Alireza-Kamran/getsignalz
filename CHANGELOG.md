@@ -144,6 +144,14 @@ the 08-21 outage.
 
 ---
 
+## v1.40.1 — 2026-08-30
+
+**Stats:** 17 trades · WR: 41% · P&L: +113.3%
+
+No changes — all parameters within target bounds.
+
+---
+
 ## v1.37.0 — 2026-08-25
 
 **Stats:** 17 trades · WR: 41% · P&L: +113.3%
