@@ -53,6 +53,14 @@ works when someone remembers it is not a control. `test_session_retry.py`, 17 as
 
 ---
 
+## v1.42.1 — 2026-09-01
+
+**Stats:** 17 trades · WR: 41% · P&L: +113.3%
+
+No changes — all parameters within target bounds.
+
+---
+
 ## v1.39.0 — 2026-08-27 — THE BOT WENT BLIND AND EVERY HEALTH CHECK SAID GREEN
 
 **Stats:** live n=17, WR 41.2%, sumR +2.61, meanR +0.153, t=+0.42. Book flat. No parameter
