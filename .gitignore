@@ -14,6 +14,10 @@ bot.log
 .night_report.json
 # Liveness timestamp for the cross-restart downtime detector (live.py)
 .heartbeat
+# Nightly-session success marker + lock, read by self_improve.sh's retries
+.last_session
+.self_improve.lock
+.crontab.bak
 # Per-strategy runtime journals
 journal_s2.json
 

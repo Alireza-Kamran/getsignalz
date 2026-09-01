@@ -4,13 +4,66 @@
 
 # Cron uses a minimal default PATH that doesn't reliably include the claude
 # CLI's install location — pin the same PATH the other root cron jobs use.
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+#
+# SELF_IMPROVE_BIN_PREFIX is a test seam: it lets test_session_retry.py put a
+# stub `claude` ahead of the real one. Without it this pin silently DISCARDS any
+# PATH the caller exported, so a test that redirects PATH to a stub still
+# launches a real nightly session — which is what happened while writing that
+# suite, leaving an orphaned session running unsupervised with acceptEdits.
+export PATH="${SELF_IMPROVE_BIN_PREFIX:+$SELF_IMPROVE_BIN_PREFIX:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-LOG="/root/trade/selflearn.log"
+# Paths are env-overridable so test_session_retry.sh can exercise the guards
+# against temp files. Redirect the RESOURCE, don't stub the CALLER -- stubbing
+# call sites is how test_ratchet.py ended up writing into the live state.json
+# on 2026-08-24 and switching the ratchet off for 24h.
+# Bash reads a script incrementally by byte offset and seeks back after each
+# command, so EDITING THIS FILE WHILE IT RUNS makes the live shell resume
+# mid-token. The nightly session this script launches edits files in this repo
+# — including this one — so always run from an immutable snapshot.
+if [ -z "$SELF_IMPROVE_SNAPSHOT" ]; then
+    SNAP="$(mktemp)"
+    cat "$0" > "$SNAP"
+    export SELF_IMPROVE_SNAPSHOT=1
+    bash "$SNAP" "$@"
+    RC=$?
+    rm -f "$SNAP"
+    exit $RC
+fi
+
+LOG="${SELF_IMPROVE_LOG:-/root/trade/selflearn.log}"
+MARKER="${SELF_IMPROVE_MARKER:-/root/trade/.last_session}"
+LOCK="${SELF_IMPROVE_LOCK:-/root/trade/.self_improve.lock}"
+
+# scheduled | retry | retry-last  (see the cron block at the bottom of this file)
+MODE="${1:-scheduled}"
+TODAY="$(date -u +%F)"
+
+# A retry is a NO-OP once today's session has succeeded. This single check is
+# what makes the extra cron entries safe: on a normal night they read one file
+# and exit without burning a session or writing a log line.
+if [ "$MODE" != "scheduled" ]; then
+    if [ -f "$MARKER" ] && [ "$(cut -d' ' -f1 "$MARKER" 2>/dev/null)" = "$TODAY" ]; then
+        exit 0
+    fi
+fi
+
+# Never allow two sessions at once (a retry racing a still-running 02:00 run, or
+# a manual invocation). -n fails immediately rather than queueing behind it.
+exec 9>"$LOCK"
+if ! flock -n 9; then
+    echo "$(date -u '+%Y-%m-%d %H:%M UTC') [$MODE] another self_improve run holds the lock — skipping" >> "$LOG"
+    exit 0
+fi
+
 echo "" >> "$LOG"
 echo "========================================" >> "$LOG"
+# Header format is parsed by the session-history analysis; keep it byte-stable
+# and put the mode on its own line below.
 echo "SELF-LEARN: $(date -u '+%Y-%m-%d %H:%M UTC')" >> "$LOG"
 echo "========================================" >> "$LOG"
+if [ "$MODE" != "scheduled" ]; then
+    echo "MODE: $MODE (no successful session yet today)" >> "$LOG"
+fi
 
 cd /root/trade
 
@@ -197,17 +250,68 @@ fi
 cat "$OUT_TMP" >> "$LOG"
 echo "Session ended: $(date -u '+%H:%M UTC') (exit $RC)" >> "$LOG"
 
-if [ $RC -ne 0 ] || grep -qiE "command not found|oauth session expired|session limit|failed to authenticate" "$OUT_TMP"; then
+# The exit code is the authority. The string check is a fallback for a CLI that
+# refuses and still exits 0 -- and it reads only the FIRST 200 bytes, because a
+# hard refusal is the entire output ("You've hit your session limit ...") and is
+# printed before any transcript. Scanning the whole file would match a session
+# that merely DISCUSSES these strings -- which is exactly what tonight's report
+# about usage-limit failures does. An instrument must not match its own output.
+FAILED=0
+if [ $RC -ne 0 ] || head -c 200 "$OUT_TMP" | grep -qiE "command not found|oauth session expired|hit your (session|weekly|monthly)|failed to authenticate"; then
+    FAILED=1
+fi
+
+if [ $FAILED -eq 0 ]; then
+    # The success marker is what later retries read to decide they are a no-op.
+    echo "$TODAY $(date -u +%H:%M) $MODE" > "$MARKER"
+    if [ "$MODE" != "scheduled" ]; then
+        python3 - "$MODE" <<'PYEOF' >> "$LOG" 2>&1
+import sys
+sys.path.insert(0, "/root/trade")
+import tg
+tg.dm_owner("✅ <b>Nightly session recovered on " + tg.esc(sys.argv[1]) +
+            "</b>\nThe 02:00 UTC run failed; this attempt completed. "
+            "No supervision was lost today.")
+PYEOF
+    fi
+else
     if [ $RC -eq 124 ]; then
         SNIPPET="Session hit the 60-minute wall clock and was killed (exit 124)."
     else
         SNIPPET="$(tail -c 500 "$OUT_TMP")"
     fi
-    python3 - "$SNIPPET" <<'PYEOF' >> "$LOG" 2>&1
+    # MODE decides whether this is worth a DM. A plain "retry" failure is a
+    # second notice about a failure already reported at 02:00 -- logging it is
+    # enough. Re-sending it is the alarm fatigue that made the real 08-27
+    # outage read as noise.
+    case "$MODE" in
+      scheduled)
+        HEAD="⚠️ <b>Nightly self-learn (02:00 UTC) likely failed</b>
+Automatic retries are scheduled for 04:30 and 15:00 UTC." ;;
+      --retry-last)
+        HEAD="🚨 <b>No nightly session completed today</b>
+All attempts failed (02:00, 04:30, 15:00 UTC). The bot is running unsupervised — no analysis, no commit, no report for $TODAY." ;;
+      *)
+        HEAD="" ;;
+    esac
+    if [ -n "$HEAD" ]; then
+        python3 - "$HEAD" "$SNIPPET" <<'PYEOF' >> "$LOG" 2>&1
 import sys
 sys.path.insert(0, "/root/trade")
 import tg
-tg.dm_owner("⚠️ Nightly self-learn (02:00 UTC) likely failed:\n\n" + sys.argv[1])
+# esc() the raw session output: it is arbitrary text going into a parse_mode=HTML
+# send, and a traceback containing "<urllib3.connection.HTTPSConnection object>"
+# would be rejected as bad entities -- losing the very alert being sent.
+tg.dm_owner(sys.argv[1] + "\n\n<pre>" + tg.esc(sys.argv[2]) + "</pre>")
 PYEOF
+    fi
 fi
 rm -f "$OUT_TMP"
+
+# Cron (see `crontab -l`):
+#   0  2 * * * /root/trade/self_improve.sh
+#   30 4 * * * /root/trade/self_improve.sh --retry        # session limits reset 02:10-04:00
+#   0 15 * * * /root/trade/self_improve.sh --retry-last   # weekly limits reset 14:00
+# Both retries exit immediately unless today's run failed, so on a normal night
+# they cost one stat() each. Measured against selflearn.log 07-24 -> 08-31:
+# 7 of 14 lost nights would have been recovered (65% -> 82% session success).

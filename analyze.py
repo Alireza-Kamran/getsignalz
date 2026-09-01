@@ -391,6 +391,54 @@ def _ratchet_slippage(state):
     return measured, gap
 
 
+SELFLEARN_LOG = "/root/trade/selflearn.log"
+
+
+def _session_history(path=SELFLEARN_LOG, limit=14):
+    """Mine selflearn.log for whether the NIGHTLY SESSION itself ran.
+
+    This is an availability metric, not a trading one, and it belongs next to
+    candle continuity for the same reason: on 2026-08-28/29/30 the 02:00 session
+    died on usage limits three nights running and the bot traded unsupervised
+    for four days. Nothing in the report showed it -- the 08-31 session only
+    found out by reading this log by hand.
+
+    Returns (rows, stats) where rows are (date, time, rc, reason) newest-first.
+    Only sessions from 2026-07-24 are counted: the "Session ended (exit N)" line
+    did not exist before then, so earlier runs cannot be scored and must not be
+    silently reported as failures.
+    """
+    try:
+        txt = open(path, errors="replace").read()
+    except OSError:
+        return [], {}
+
+    chunks = re.split(
+        r"={40}\nSELF-LEARN: (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC\n={40}\n", txt)
+    rows = []
+    for i in range(1, len(chunks) - 2, 3):
+        date, tm, body = chunks[i], chunks[i + 1], chunks[i + 2]
+        m = re.search(r"Session ended: \S+ UTC \(exit (\d+)\)", body)
+        if not m:
+            continue                      # still running, or pre-07-24 format
+        rc = int(m.group(1))
+        lim = re.search(r"You've hit your (session|weekly|monthly)[^\n]*", body)
+        if rc == 0:
+            reason = ""
+        elif lim:
+            reason = lim.group(0).replace("You've hit your ", "").strip()
+        elif rc == 124:
+            reason = "killed at the 60-minute wall clock"
+        else:
+            reason = (body.strip().splitlines() or ["unknown"])[0][:60]
+        rows.append((date, tm, rc, reason))
+
+    ok = sum(1 for r in rows if r[2] == 0)
+    stats = {"n": len(rows), "ok": ok, "failed": len(rows) - ok,
+             "rate": (100.0 * ok / len(rows)) if rows else 0.0}
+    return rows[::-1][:limit], stats
+
+
 def full_report():
     """
     Produce a full performance report as a string.
@@ -437,6 +485,29 @@ def full_report():
         lines.append("  (quiet hours 02:00-03:59 UTC are expected silent)")
     except Exception as _e:
         lines.append(f"\n── AVAILABILITY ──\n  availability check failed: {_e}")
+
+    # ── Supervision (did the nightly session itself run?) ──────────
+    # Second, for the same reason availability is first: an unsupervised bot is
+    # not a measured bot. 08-28/29/30 all died on usage limits and four days of
+    # trading went unreviewed before anyone noticed.
+    try:
+        _srows, _sst = _session_history()
+        if _sst.get("n"):
+            lines.append(f"\n── SUPERVISION (nightly session, n={_sst['n']}) ──")
+            lines.append(f"  completed: {_sst['ok']}/{_sst['n']} "
+                         f"({_sst['rate']:.0f}%)   failed: {_sst['failed']}")
+            _miss = [r for r in _srows if r[2] != 0]
+            if _miss:
+                lines.append("  recent failures (newest first):")
+                for _d, _t, _rc, _why in _miss:
+                    lines.append(f"    ✗ {_d} {_t}  exit {_rc}  {_why}")
+            else:
+                lines.append("  no failed session in the last "
+                             f"{len(_srows)} runs ✓")
+            lines.append("  retries: 04:30 (session limits reset 02:10-04:00) "
+                         "and 15:00 UTC (weekly limits reset 14:00)")
+    except Exception as _e:
+        lines.append(f"\n── SUPERVISION ──\n  session history failed: {_e}")
 
     # ── Open book ──────────────────────────────────────────────────
     # Every other section reads closed_trades, so an open position is invisible

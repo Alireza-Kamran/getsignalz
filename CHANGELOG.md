@@ -6,6 +6,53 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.42.0 — 2026-09-01 — THE SESSION THAT SUPERVISES THE BOT FAILED 14 OF 40 TIMES
+
+**Stats:** live n=17, WR 41.2%, sumR +2.61, EV +0.153R, t=+0.42. Book flat since 08-25.
+No parameter changed — every S2 constant is owner-locked and t=+0.42 justifies moving none.
+Seven days silent is the gate working as measured (census admits 8.7% of long / 2.1% of short
+RSI candidates). ARB sat RSI 91→94 at ADX 39→45 tonight: a textbook short, correctly gated out.
+
+**Last night's fix verified: ZERO blind-bot alerts.** The 01:17 off-session and 04:00
+quiet-hours windows, which produced a false 🚨-then-✅ pair every night 08-28→08-30, have each
+passed twice in silence.
+
+**THE FINDING.** Mined `selflearn.log` over 07-24 → 08-31: **40 sessions, 26 completed, 14
+failed = 65%**. Seven of the failures were usage limits whose reset was *hours* away, and
+nothing ever re-ran them — which is why the bot traded unsupervised for four days.
+
+**CORRECTION.** The 08-31 note ranked "no alert exists for a missed session" as its top item.
+An alert *does* exist — `self_improve.sh` DMs on every non-zero exit, and all three of
+08-28/29/30 exited 1. Detection was never the gap; **recovery** was. A detector tells you the
+bot ran unsupervised; a retry means it didn't.
+
+**FIXED — automatic same-day retries.** `session limit` always resets 02:10–04:00 UTC and
+`weekly limit` at 14:00, so cron now adds `--retry` at 04:30 and `--retry-last` at 15:00.
+Replayed against the record: **7 of 14 lost nights recovered, 65% → 82%**; the recent four-day
+run would have been one day. A human already proved it by hand — on 07-26 the 02:00 run died on
+a spend limit and a manual 04:41 rerun succeeded. Safe because a retry is a **no-op** once
+`.last_session` carries today's date, and it doubles as the missing-session detector because it
+keys on "did today succeed", not on "did 02:00 report a failure".
+
+**Three bugs found by writing the test, not by reading the code:** the escalation `case` matched
+`retry-last` while the argument is `--retry-last` (the end-of-day alert would never have fired);
+`self_improve.sh` pins `PATH` and discarded the test's stub, **launching a real nightly session
+that orphaned to ppid=1 with acceptEdits** (killed by exact PID, no damage); and the failure
+detector grepped the whole transcript for `"hit your session limit"` — text this very report
+contains, so a successful session would have scored as failed. **An instrument must not match
+its own output.**
+
+**Also fixed:** the failure DM interpolated raw output into a `parse_mode=HTML` send without
+`tg.esc()`, so a traceback containing `<urllib3...>` would be rejected and the alert lost
+exactly when it mattered. And `self_improve.sh` now re-execs from an immutable snapshot of
+itself — bash reads scripts by byte offset, and the session it launches edits this repo.
+
+**Added:** `analyze.py` SUPERVISION section, printed second after AVAILABILITY — completion
+rate plus named recent failures. Same reasoning as AVAILABILITY on 08-23: a control that only
+works when someone remembers it is not a control. `test_session_retry.py`, 17 assertions.
+
+---
+
 ## v1.39.0 — 2026-08-27 — THE BOT WENT BLIND AND EVERY HEALTH CHECK SAID GREEN
 
 **Stats:** live n=17, WR 41.2%, sumR +2.61, meanR +0.153, t=+0.42. Book flat. No parameter
