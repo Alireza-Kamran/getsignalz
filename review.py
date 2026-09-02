@@ -457,12 +457,24 @@ def should_quiet(hour_utc):
     return 2 <= hour_utc < 4
 
 
+# Both latches are WINDOWS, not instants, and both rely on the caller's
+# once-per-period guard (live.py holds _nightly_done by date and _weekly_done by
+# ISO week, and sets each BEFORE invoking the review) to fire exactly once.
+#
+# They were `minute == 0` / `minute == 30` until 2026-09-02. The main loop polls
+# every POLL=20s plus however long that pass's network calls take, so an exact
+# minute match only lands if a pass happens to begin inside those 60 seconds --
+# and on 2026-09-02 the review was moved BELOW position management, putting three
+# more Hyperliquid round-trips ahead of the check. Under the 502 bursts bot.log
+# shows regularly, that is enough to step straight over minute 0 and silently
+# skip the review for the whole day. A window costs nothing (the date latch still
+# bounds it to one run) and removes the race entirely.
 def should_nightly_review(hour_utc, minute_utc):
-    return hour_utc == 23 and minute_utc == 0
+    return hour_utc == 23 and minute_utc < 10
 
 
 def should_weekly_review(weekday, hour_utc, minute_utc):
-    return weekday == 6 and hour_utc == 23 and minute_utc == 30
+    return weekday == 6 and hour_utc == 23 and minute_utc >= 30
 
 
 def should_version_push(hour_utc, minute_utc):

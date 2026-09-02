@@ -1,0 +1,132 @@
+"""Pins the 2026-09-02 fix: blocking maintenance must not sit above position
+management, and the review latches must be windows guarded by a once-per-period
+flag set BEFORE the call.
+
+Two kinds of assertion here, deliberately:
+
+  * BEHAVIOURAL -- should_nightly_review / should_weekly_review are pure
+    functions of the clock and can be tested directly.
+
+  * SOURCE-ORDER -- the actual defect was an ORDERING one inside run()'s while
+    loop, and no amount of stubbing catches that: a stubbed nightly_review()
+    returns instantly, so a test with stubs passes just as happily with the
+    review above the ratchet as below it. The only way to assert "A runs before
+    B" for a blocking call is to read the source. Same technique as
+    test_scan_stale.py's marker-precedes-the-continue check (2026-08-31).
+
+Run: python3 test_review_order.py
+"""
+import re
+import sys
+
+sys.path.insert(0, "/root/trade")
+
+from review import should_nightly_review, should_weekly_review
+
+FAILED = []
+PASSED = 0
+
+
+def check(label, cond):
+    global PASSED
+    if cond:
+        PASSED += 1
+    else:
+        FAILED.append(label)
+
+
+# ── Source under test ────────────────────────────────────────────────────────
+# Full-line comments are stripped FIRST. The fix being pinned here is documented
+# by a comment block that names nightly_review(), _check_trail_s2() and the rest
+# in prose -- and that block sits, by design, ABOVE the ratchet it describes. A
+# naive .find() therefore matched the explanation instead of the call and the
+# ordering assertions failed against correct source. Same trap as the 2026-09-01
+# session-failure detector that matched the report discussing the strings it
+# grepped for: AN INSTRUMENT MUST NOT MATCH ITS OWN DOCUMENTATION.
+# Inline (trailing) comments are left alone -- none of the needles below appear
+# in one, and stripping them would risk mangling a '#' inside a string literal.
+SRC = open("/root/trade/live.py").read()
+LOOP = "\n".join(ln for ln in SRC[SRC.index("def run()"):].splitlines()
+                 if not ln.lstrip().startswith("#"))
+
+
+def pos(needle, label):
+    """Index of `needle` within run(); records a failure if absent."""
+    i = LOOP.find(needle)
+    check(f"{label}: {needle!r} present in run()", i != -1)
+    return i if i != -1 else 10 ** 9
+
+
+# ── 1. Nightly latch is a window, not an instant ─────────────────────────────
+for minute in range(0, 10):
+    check(f"nightly fires at 23:{minute:02d}", should_nightly_review(23, minute))
+for minute in (10, 11, 30, 59):
+    check(f"nightly silent at 23:{minute:02d}", not should_nightly_review(23, minute))
+for hour in (0, 4, 22, 21):
+    check(f"nightly silent at {hour:02d}:00", not should_nightly_review(hour, 0))
+
+# The pre-fix behaviour must still be covered by the new window -- widening may
+# not move the start of the window, only its end.
+check("nightly still fires at exactly 23:00", should_nightly_review(23, 0))
+
+# ── 2. Weekly latch is a window, not an instant ──────────────────────────────
+for minute in (30, 31, 45, 59):
+    check(f"weekly fires Sun 23:{minute:02d}", should_weekly_review(6, 23, minute))
+for minute in (0, 15, 29):
+    check(f"weekly silent Sun 23:{minute:02d}", not should_weekly_review(6, 23, minute))
+for wd in (0, 3, 5):
+    check(f"weekly silent on weekday {wd}", not should_weekly_review(wd, 23, 30))
+check("weekly silent at 22:30 Sun", not should_weekly_review(6, 22, 30))
+check("weekly still fires at exactly Sun 23:30", should_weekly_review(6, 23, 30))
+
+# ── 3. Nightly and weekly windows do not overlap ─────────────────────────────
+# If they did, one pass could trigger both and the weekly would run against a
+# loop already blocked by the nightly.
+overlap = [m for m in range(60)
+           if should_nightly_review(23, m) and should_weekly_review(6, 23, m)]
+check(f"nightly/weekly windows disjoint (overlap={overlap})", not overlap)
+
+# ── 4. SOURCE ORDER: position management precedes all blocking maintenance ───
+i_fetch   = pos("positions   = get_positions()", "fetch")
+i_closed  = pos("_check_closed(positions, account_val)", "closed-detect")
+i_trail   = pos("_check_trail_s2(positions, mids=mids)", "ratchet")
+i_version = pos("version_push()", "version push")
+i_nightly = pos("nightly_review()", "nightly review")
+i_weekly  = pos("weekly_review()", "weekly review")
+
+check("prices fetched before closed-trade detection", i_fetch < i_closed)
+check("closed-trade detection before the ratchet", i_closed < i_trail)
+
+# THE regression this file exists for. nightly_review() runs ai_brain and
+# _self_improve() inline; with it above the ratchet, _check_trail_s2 did not
+# execute for a measured 27.7 min on 2026-08-23 with an ETH SHORT open.
+check("RATCHET runs before nightly review", i_trail < i_nightly)
+check("RATCHET runs before weekly review", i_trail < i_weekly)
+check("RATCHET runs before version push", i_trail < i_version)
+check("closed-trade detection before nightly review", i_closed < i_nightly)
+
+# ── 5. SOURCE ORDER: the once-per-period latch is set BEFORE the call ────────
+# This is what makes the widened window in (1) and (2) safe. If the flag were
+# assigned after the review returned, every pass inside the 10-minute window
+# would start another review.
+i_nflag = pos("_nightly_done = now_utc.date()", "nightly latch")
+i_wflag = pos("_weekly_done = now_utc.isocalendar()[1]", "weekly latch")
+check("_nightly_done set BEFORE nightly_review()", i_nflag < i_nightly)
+check("_weekly_done set BEFORE weekly_review()", i_wflag < i_weekly)
+
+# ── 6. The scan still sits below the review (documented, not yet fixed) ──────
+# SCAN_STALE_ALERT_SEC=8100 is sized to clear the nightly review as the longest
+# legitimate scan-free stretch. If someone moves the scan above the review, that
+# budget silently becomes ~70 min too generous and the blind-bot detector goes
+# half-blind. Fail loudly here so that change is made deliberately, with the
+# threshold re-derived at the same time.
+i_scan = pos("now_ts = _candle_ts()", "candle scan")
+check("candle scan still BELOW nightly review "
+      "(else re-derive SCAN_STALE_ALERT_SEC)", i_nightly < i_scan)
+
+# ── Report ───────────────────────────────────────────────────────────────────
+total = PASSED + len(FAILED)
+print(f"test_review_order: {PASSED}/{total} passed")
+for f in FAILED:
+    print(f"  FAIL: {f}")
+sys.exit(1 if FAILED else 0)

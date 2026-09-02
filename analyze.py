@@ -262,6 +262,80 @@ def _open_during(gap_start, gap_end, state):
     return out
 
 
+# Wall-clock timestamp AND the candle label, which _CANDLE_RE deliberately does
+# not separate (availability only cares that an hour was seen at all).
+_CANDLE_LAG_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2}) \| INFO \| .*Candle (\d{2}):00 UTC")
+
+# A candle header this far behind its own hour means the loop was blocked, not
+# merely busy: an ordinary pass logs the header ~10s past the hour.
+_LAG_BLOCKED_SEC = 300
+
+
+def _loop_latency(logs=None, state=None):
+    """How long after each hour the loop actually got round to that candle.
+
+    AVAILABILITY answers 'did the bot scan this hour', which is binary and
+    therefore blind to a loop that scanned every hour but twenty minutes late.
+    Found 2026-09-02 by throwaway code, and made permanent here for the same
+    reason AVAILABILITY and SUPERVISION were: the last three times a defect was
+    found by a script written that night and then thrown away, the next session
+    had no way to see whether it had come back.
+
+    The number that matters is not the delay itself but WHAT WAS BLOCKED. Until
+    2026-09-02 nightly_review() -- which runs ai_brain and _self_improve()
+    inline -- sat above position management in live.py's loop, so every minute
+    of 23:00 delay was a minute _check_trail_s2 did not run. The ratchet is the
+    only mechanism in this system that produces profit.
+
+    Returns (by_hour, worst, frozen) where by_hour maps hour-of-day to
+    (n, median, p90, max, n_over_5min) and frozen lists the review-nights that
+    crossed an open position.
+    """
+    if logs is None:
+        logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
+    rows = set()
+    for path in logs:
+        try:
+            with open(path, errors="ignore") as fh:
+                for line in fh:
+                    m = _CANDLE_LAG_RE.match(line)
+                    if not m:
+                        continue
+                    wall = datetime(int(m.group(1)[:4]), int(m.group(1)[5:7]),
+                                    int(m.group(1)[8:10]), int(m.group(2)),
+                                    int(m.group(3)), int(m.group(4)))
+                    due = wall.replace(hour=int(m.group(5)), minute=0, second=0)
+                    # A candle logged after midnight belongs to the previous day.
+                    if (wall - due).total_seconds() < -3600:
+                        due -= timedelta(days=1)
+                    rows.add((wall, due, (wall - due).total_seconds()))
+        except OSError:
+            continue
+    if not rows:
+        return {}, [], []
+
+    by_hour, buckets = {}, {}
+    for wall, due, lag in rows:
+        buckets.setdefault(due.hour, []).append(lag)
+    for hr, v in buckets.items():
+        v.sort()
+        by_hour[hr] = (len(v), v[len(v) // 2], v[int(len(v) * 0.9)], v[-1],
+                       sum(1 for x in v if x > _LAG_BLOCKED_SEC))
+
+    worst = sorted(rows, key=lambda r: -r[2])[:5]
+
+    # Cross-reference: a blocked loop only costs money with a position open.
+    frozen = []
+    if state:
+        for wall, due, lag in sorted(rows):
+            if lag <= _LAG_BLOCKED_SEC:
+                continue
+            for coin, side, still_open in _open_during(due, wall, state):
+                frozen.append((due, coin, side, lag))
+    return by_hour, worst, frozen
+
+
 # Last commit that touched an exit constant in strategy2.py (TP_R 3.0 -> 5.0,
 # TRAIL_START_R -> 2.50). Trades opened before this ran a materially different
 # exit and must not be pooled with the ones after it -- see _excursion_stats.
@@ -508,6 +582,42 @@ def full_report():
                          "and 15:00 UTC (weekly limits reset 14:00)")
     except Exception as _e:
         lines.append(f"\n── SUPERVISION ──\n  session history failed: {_e}")
+
+    # ── Loop latency (did the loop get to each candle ON TIME?) ────
+    # Third, because AVAILABILITY above is binary: it asks whether an hour was
+    # scanned, so a loop that scanned every hour twenty minutes late reads as
+    # perfectly healthy. That is exactly what the 23:00 review looked like for
+    # 41 nights.
+    try:
+        _bh, _worst, _frozen = _loop_latency(state=load_state())
+        if _bh:
+            _all = sorted(_bh.items())
+            _slow = [(h, v) for h, v in _all if v[1] > 120 or v[4] > 3]
+            _med = sorted(v[1] for _, v in _all)[len(_all) // 2]
+            lines.append(f"\n── LOOP LATENCY (candle start vs its own hour) ──")
+            lines.append(f"  typical hour: median {_med:.0f}s behind the hour")
+            if _slow:
+                lines.append("  hours running late:")
+                for h, (n, md, p90, mx, over) in _slow:
+                    lines.append(f"    {h:02d}:00  n={n:3d}  median {md:5.0f}s  "
+                                 f"p90 {p90:6.0f}s  max {mx:6.0f}s  "
+                                 f"{over} nights >5min")
+            else:
+                lines.append("  no hour runs systematically late ✓")
+            if _frozen:
+                lines.append("  ⚠️  loop blocked >5min WITH A POSITION OPEN "
+                             "(ratchet frozen):")
+                _tot = 0.0
+                for _due, _coin, _side, _lag in _frozen:
+                    _tot += _lag
+                    lines.append(f"    {_due:%Y-%m-%d %H:%M}  {_coin} {_side}"
+                                 f"  frozen {_lag/60:.1f} min")
+                lines.append(f"    total {_tot/60:.0f} min of unmanaged ratchet")
+            lines.append("  (blocking maintenance was moved BELOW position "
+                         "management 2026-09-02; entries on the delayed candle "
+                         "are still affected — see test_review_order.py)")
+    except Exception as _e:
+        lines.append(f"\n── LOOP LATENCY ──\n  latency check failed: {_e}")
 
     # ── Open book ──────────────────────────────────────────────────
     # Every other section reads closed_trades, so an open position is invisible

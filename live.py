@@ -897,33 +897,6 @@ def run():
             now_utc = datetime.now(timezone.utc)
             h, m, wd = now_utc.hour, now_utc.minute, now_utc.weekday()
 
-            # ── Version push fallback (catches missed pushes after restarts) ──
-            import os as _os
-            if (h >= 4 and _version_done != now_utc.date()
-                    and _os.path.exists("/root/trade/.night_report.json")):
-                _version_done = now_utc.date()
-                _beat(1800)      # git push can stall on the network
-                version_push()
-
-            # ── Nightly review ───────────────────────────────────────────────
-            if should_nightly_review(h, m) and _nightly_done != now_utc.date():
-                _nightly_done = now_utc.date()
-                _beat(4800)      # ai_brain runs to BRAIN_TIMEOUT=3600s
-                nightly_review()
-                # Shadow-mode strategy 2 reports separately: its numbers are
-                # deliberately kept out of the main review, which drives the
-                # public win rate and Trust Score.
-                try:
-                    tg.dm_owner(_s2_report())
-                except Exception as e:
-                    logger.error(f"[S2] nightly report failed: {e}")
-
-            # ── Weekly review ────────────────────────────────────────────────
-            if should_weekly_review(wd, h, m) and _weekly_done != now_utc.isocalendar()[1]:
-                _weekly_done = now_utc.isocalendar()[1]
-                _beat(1800)
-                weekly_review()
-
             # ── Fetch positions + prices (shared singleton connection) ─────────
             positions   = get_positions()
             account_val = get_account_value()
@@ -936,11 +909,68 @@ def run():
             # trade could not lock in profit for two hours a night. Lost upside
             # rather than lost capital -- the resting exchange stop always sits
             # underneath -- but there is no reason to give it away.
+            #
+            # Deliberately ahead of the maintenance block below for the SAME
+            # reason, found 2026-09-02. nightly_review() runs ai_brain and
+            # _self_improve() INLINE in this loop, and it used to sit above this
+            # point: measured over 41 nights the 23:00 candle started a median
+            # 21s late but a p90 of 19.4 min and a worst case of 27.7 min, with
+            # 14 nights over 5 min -- every other hour of the day sits at ~10s.
+            # For all of that time _check_trail_s2 simply did not execute. Eleven
+            # review-nights crossed an open position (70 min of frozen ratchet in
+            # total, 63 of them the ETH SHORT of 08-21..08-25), and the ceiling is
+            # far higher than the observed worst case: _beat(4800) below tolerates
+            # 80 minutes and BRAIN_TIMEOUT is 3600s. The measured cost so far is
+            # ~0, but this is the third time this exact hazard has been found --
+            # the socket hang (07-28) and the quiet-hours gate (07-28) were the
+            # other two -- and the rule it keeps teaching is that NOTHING blocking
+            # may sit above position management.
             _check_closed(positions, account_val)
             if _open_trades:
                 if S1_ENABLED:
                     _check_trail(positions, account_val, mids=mids)
                 _check_trail_s2(positions, mids=mids)
+
+            # ── Blocking maintenance (runs AFTER the ratchet, see above) ───────
+            # NOTE: the candle scan still sits BELOW this block, so the review
+            # continues to delay *entries* by up to ~20 min on the 23:00 candle
+            # (live-exercised once: SOL 2026-08-16 23:09:47, +2.48R). Moving the
+            # scan above the review as well would also invalidate the budget
+            # SCAN_STALE_ALERT_SEC=8100 is built on -- it is sized to clear
+            # exactly this review -- and that detector was only stabilised on
+            # 08-31 after a 3-of-4 false-alarm run. Left for a session that can
+            # re-derive the threshold with it. Reported, not done.
+
+            # ── Version push fallback (catches missed pushes after restarts) ──
+            import os as _os
+            if (h >= 4 and _version_done != now_utc.date()
+                    and _os.path.exists("/root/trade/.night_report.json")):
+                _version_done = now_utc.date()
+                _beat(1800)      # git push can stall on the network
+                version_push()
+
+            # ── Nightly review ───────────────────────────────────────────────
+            if should_nightly_review(h, m) and _nightly_done != now_utc.date():
+                _nightly_done = now_utc.date()
+                _beat(4800)      # ai_brain runs to BRAIN_TIMEOUT=3600s
+                logger.info("Nightly review starting (blocks the loop)")
+                nightly_review()
+                logger.info("Nightly review complete")
+                # Shadow-mode strategy 2 reports separately: its numbers are
+                # deliberately kept out of the main review, which drives the
+                # public win rate and Trust Score.
+                try:
+                    tg.dm_owner(_s2_report())
+                except Exception as e:
+                    logger.error(f"[S2] nightly report failed: {e}")
+
+            # ── Weekly review ────────────────────────────────────────────────
+            if should_weekly_review(wd, h, m) and _weekly_done != now_utc.isocalendar()[1]:
+                _weekly_done = now_utc.isocalendar()[1]
+                _beat(1800)
+                logger.info("Weekly review starting (blocks the loop)")
+                weekly_review()
+                logger.info("Weekly review complete")
 
             # ── Quiet hours ──────────────────────────────────────────────────
             if should_quiet(h):
