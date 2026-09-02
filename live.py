@@ -516,7 +516,7 @@ def _log_s2_close(coin, t, exit_px, lev_pct, hit, dur):
     raw_pct = lev_pct / lev            # price move alone, before leverage
     data["trades"].append({
         "coin": coin, "direction": t["dir"], "entry": t["entry"],
-        "exit": exit_px, "sl": t["sl"], "tp": t["tp"],
+        "exit": exit_px, "sl": t["sl"], "sl_orig": t.get("sl_orig", t["sl"]), "tp": t["tp"],
         "leverage": lev,
         "lev_pct": round(lev_pct, 2),   # with leverage  (what a signal shows)
         "raw_pct": round(raw_pct, 3),   # without leverage (pure price move)

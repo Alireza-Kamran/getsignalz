@@ -53,6 +53,15 @@ works when someone remembers it is not a control. `test_session_retry.py`, 17 as
 
 ---
 
+## v1.43.0 — 2026-09-02
+
+**Stats:** 18 trades · WR: 44% · P&L: +170.9%
+
+**Code improvements (1):**
+- live.py: journal_s2.json omits sl_orig, so any direct R analysis on that file — including _s2_report and future queries — computes R against the ratcheted stop, systematically understating every winner that armed the ratchet. analyze.py documents the error precisely. t always has sl_orig (written at trade open); t.get with t['sl'] fallback is safe for any pre-fix entries already in _open_trades at restart.
+
+---
+
 ## v1.42.1 — 2026-09-01
 
 **Stats:** 17 trades · WR: 41% · P&L: +113.3%
