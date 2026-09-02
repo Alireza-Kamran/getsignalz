@@ -16,6 +16,7 @@ bot.log
 .heartbeat
 # Nightly-session success marker + lock, read by self_improve.sh's retries
 .last_session
+.review_latch
 .self_improve.lock
 .crontab.bak
 # Per-strategy runtime journals

@@ -74,6 +74,47 @@ _tick_deadline = 900     # seconds of silence tolerated for an ordinary cycle
 # writing a heartbeat through it every cycle would widen exactly that race.
 HEARTBEAT_FILE = "/root/trade/.heartbeat"
 _last_beat_write = 0.0
+
+# ── Review latches, persisted ─────────────────────────────────────────────────
+# _nightly_done / _weekly_done are module globals, so they reset to None on every
+# restart -- and review._self_improve() ends in os.execv() (review.py:410), an
+# IN-PLACE restart triggered from inside nightly_review() itself, during the very
+# window that decides whether to run it.
+#
+# That was harmless while should_nightly_review() matched minute==0 exactly: a
+# restart a few minutes later landed outside the window. Widening the window to
+# the first 10 minutes on 2026-09-02 (needed because the reorder puts three more
+# Hyperliquid round-trips ahead of the check) turns it into a re-entry bug --
+# review runs, execs itself at 23:03, comes back with an empty latch, sees
+# minute 3, and reviews again. So the latch has to outlive the process.
+#
+# Its own file for the same reason as HEARTBEAT_FILE above: tracker.save_state is
+# a non-atomic read-modify-write that has already silently erased one position.
+REVIEW_LATCH_FILE = "/root/trade/.review_latch"
+
+
+def _load_review_latches():
+    """(nightly_date, weekly_isoweek) from disk; (None, None) if absent/corrupt."""
+    try:
+        with open(REVIEW_LATCH_FILE) as fh:
+            raw = json.load(fh)
+        night = raw.get("nightly")
+        night = datetime.strptime(night, "%Y-%m-%d").date() if night else None
+        week = raw.get("weekly")
+        return night, (int(week) if week is not None else None)
+    except Exception:
+        return None, None
+
+
+def _save_review_latches(nightly, weekly):
+    """Persist the latches. Never raises -- a failure here must not stop the loop
+    (it degrades to the old in-memory behaviour, it does not break trading)."""
+    try:
+        with open(REVIEW_LATCH_FILE, "w") as fh:
+            json.dump({"nightly": nightly.isoformat() if nightly else None,
+                       "weekly": weekly}, fh)
+    except Exception as e:
+        logger.warning(f"could not persist review latch: {e}")
 # 30 min: far above an ordinary systemd bounce (RestartSec=30) and the nightly
 # restart, far below the outage class this exists to catch. A nightly review
 # that blocks the loop longer than this and is then restarted will also trip it
@@ -706,6 +747,14 @@ def run():
     atexit.register(_release_lock)
     _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
 
+    # Restore the review latches before the loop can act on them, so a restart
+    # inside the review window (review._self_improve() execv's itself) cannot
+    # re-run a review that already ran today. See REVIEW_LATCH_FILE.
+    _nightly_done, _weekly_done = _load_review_latches()
+    if _nightly_done or _weekly_done is not None:
+        logger.info(f"Review latches restored — nightly={_nightly_done} "
+                    f"weekly(isoweek)={_weekly_done}")
+
     # Read BEFORE the first _beat() overwrites the file. This is the only
     # evidence a host-level outage leaves behind.
     _downtime = _downtime_since_last_beat()
@@ -952,6 +1001,9 @@ def run():
             # ── Nightly review ───────────────────────────────────────────────
             if should_nightly_review(h, m) and _nightly_done != now_utc.date():
                 _nightly_done = now_utc.date()
+                # Persist BEFORE the call: nightly_review() can os.execv() from
+                # inside _self_improve(), and an in-memory-only latch dies there.
+                _save_review_latches(_nightly_done, _weekly_done)
                 _beat(4800)      # ai_brain runs to BRAIN_TIMEOUT=3600s
                 logger.info("Nightly review starting (blocks the loop)")
                 nightly_review()
@@ -967,6 +1019,7 @@ def run():
             # ── Weekly review ────────────────────────────────────────────────
             if should_weekly_review(wd, h, m) and _weekly_done != now_utc.isocalendar()[1]:
                 _weekly_done = now_utc.isocalendar()[1]
+                _save_review_latches(_nightly_done, _weekly_done)
                 _beat(1800)
                 logger.info("Weekly review starting (blocks the loop)")
                 weekly_review()

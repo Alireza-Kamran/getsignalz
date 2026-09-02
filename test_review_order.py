@@ -114,6 +114,56 @@ i_wflag = pos("_weekly_done = now_utc.isocalendar()[1]", "weekly latch")
 check("_nightly_done set BEFORE nightly_review()", i_nflag < i_nightly)
 check("_weekly_done set BEFORE weekly_review()", i_wflag < i_weekly)
 
+# ── 5b. The latch must SURVIVE A RESTART, not just the loop ─────────────────
+# review._self_improve() ends in os.execv() (review.py:410) -- an in-place
+# restart fired from INSIDE nightly_review(), during the window that decides
+# whether to run it. A module global resets there. With the old minute==0 latch
+# that was harmless (the restart landed outside the window); with a 10-minute
+# window it is a re-entry bug: review -> exec at 23:03 -> empty latch -> minute 3
+# is still inside the window -> review again.
+i_persist = pos("_save_review_latches(_nightly_done, _weekly_done)",
+                "latch persisted")
+i_restore = pos("_nightly_done, _weekly_done = _load_review_latches()",
+                "latch restored at startup")
+check("latch persisted BEFORE nightly_review() (execv kills it otherwise)",
+      i_persist < i_nightly)
+check("latch restored at startup before the loop", i_restore < i_nightly)
+
+# The latch file must not live in state.json: tracker.save_state is a non-atomic
+# read-modify-write that has already silently erased a tracked position.
+check("latch has its own file, not state.json",
+      "REVIEW_LATCH_FILE" in SRC and ".review_latch" in SRC)
+
+# Round-trip the real helpers, including the corrupt-file path -- a latch that
+# raises on bad input would take the whole loop down at 23:00.
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location("_livemod", "/root/trade/live.py")
+try:
+    import datetime as _dtm
+    import tempfile, os as _os, json as _json
+    _lv = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_lv)
+    _tmp = tempfile.mkdtemp()
+    _lv.REVIEW_LATCH_FILE = _os.path.join(_tmp, ".review_latch")
+
+    check("missing latch file returns (None, None)",
+          _lv._load_review_latches() == (None, None))
+
+    _d = _dtm.date(2026, 9, 2)
+    _lv._save_review_latches(_d, 36)
+    check("latch round-trips through disk",
+          _lv._load_review_latches() == (_d, 36))
+
+    with open(_lv.REVIEW_LATCH_FILE, "w") as _fh:
+        _fh.write("{not json")
+    check("corrupt latch file degrades to (None, None), does not raise",
+          _lv._load_review_latches() == (None, None))
+
+    _lv._save_review_latches(None, None)
+    check("null latch round-trips", _lv._load_review_latches() == (None, None))
+except Exception as _e:                                   # pragma: no cover
+    check(f"latch helpers importable and round-trip (got {_e!r})", False)
+
 # ── 6. The scan still sits below the review (documented, not yet fixed) ──────
 # SCAN_STALE_ALERT_SEC=8100 is sized to clear the nightly review as the longest
 # legitimate scan-free stretch. If someone moves the scan above the review, that
