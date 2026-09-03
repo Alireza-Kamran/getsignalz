@@ -53,6 +53,15 @@ works when someone remembers it is not a control. `test_session_retry.py`, 17 as
 
 ---
 
+## v1.45.0 — 2026-09-03
+
+**Stats:** 18 trades · WR: 44% · P&L: +170.9%
+
+**Code improvements (1):**
+- tracker.py: The retry loop `for attempt in range(3)` was effectively a one-shot: a ConnectionResetError (printed at 22:01 in today's logs) hit the except block which called `return`, exiting _edit() immediately rather than continuing to the next attempt. With BTC and ETH live on Telegram, a dropped edit leaves subscribers reading a stale position message. Adding exponential backoff (2s then 4s) before retrying on transient network failures makes all three attempts meaningful without touching any trading logic.
+
+---
+
 ## v1.43.0 — 2026-09-02
 
 **Stats:** 18 trades · WR: 44% · P&L: +170.9%

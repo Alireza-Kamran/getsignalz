@@ -109,6 +109,9 @@ def _edit(msg_id, text):
                 print(f"[tracker] edit {msg_id} failed: {desc}")
             return
         except Exception as e:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
             print(f"[tracker] edit {msg_id} error: {e}")
             return
 
