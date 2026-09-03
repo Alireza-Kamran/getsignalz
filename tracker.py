@@ -4,7 +4,7 @@ Persistent live tracker.
 - Maintains a pinned dashboard with links + track record
 - Saves all state to state.json so it survives restarts
 """
-import threading, time, json, os, math
+import threading, time, json, os, math, traceback
 import requests
 from datetime import datetime, timezone
 
@@ -292,7 +292,13 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
 
     # Avg adverse from closed trades
     closed = state.get("closed_trades", [])
-    dd_vals = [t.get("max_adverse_pct", 0) for t in closed if t.get("max_adverse_pct", 0) < 0]
+    # `.get(k, 0)` returns None when the KEY EXISTS with a null value, which the
+    # reconstructed OP 2026-08-13 record does -- so the default never fired and
+    # `None < 0` raised. That TypeError is caught by update_dashboard's blanket
+    # `except Exception`, so from 2026-09-02 12:02 the pinned dashboard silently
+    # stopped updating and the only symptom was one log line every poll.
+    dd_vals = [v for v in (t.get("max_adverse_pct") for t in closed)
+               if isinstance(v, (int, float)) and v < 0]
     avg_dd = round(sum(dd_vals) / len(dd_vals), 1) if dd_vals else 0.0
     worst_dd = round(min(dd_vals), 1) if dd_vals else 0.0
 
@@ -435,7 +441,14 @@ def update_dashboard(state):
                 _pin(msg_id)
                 save_state(state)
     except Exception as e:
-        print(f"[tracker] dashboard error: {e}")
+        # Location, not just the message. This handler printed the bare str(e)
+        # ~800 times over 15 hours on 2026-09-02/03 while the dashboard was
+        # dead, and "'<' not supported between NoneType and int" names neither
+        # the file nor the field -- so the outage read as log noise. An
+        # exception swallowed to keep the thread alive still has to say where.
+        tb = traceback.extract_tb(e.__traceback__)
+        where = f"{tb[-1].filename.split('/')[-1]}:{tb[-1].lineno}" if tb else "?"
+        print(f"[tracker] dashboard error at {where}: {type(e).__name__}: {e}")
 
 
 # ── Main update loop ──────────────────────────────────────────────────────────

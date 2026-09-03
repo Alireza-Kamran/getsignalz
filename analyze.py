@@ -237,6 +237,31 @@ def _availability(logs=None):
     return seen, [(g[0], g[1], g[2]) for g in gaps], (lo, hi)
 
 
+def _naive_utc(ts):
+    """Parse a timestamp from the journals to a NAIVE UTC datetime, or None.
+
+    Every timestamp this system writes is UTC, but not every one says so the
+    same way. Records written by the live loop are naive ("...T00:01:48.9"),
+    while the OP 2026-08-13 record -- rebuilt by an ad-hoc repair script after
+    save_state erased it, and flagged `reconstructed_from_journal` -- carries an
+    explicit "+00:00". Mixing the two in a single comparison raises
+    TypeError("can't compare offset-naive and offset-aware datetimes"), and on
+    2026-09-03 that ONE record was aborting both the AVAILABILITY
+    cross-reference and the whole LOOP LATENCY section -- the section added the
+    previous night specifically to answer that night's primary question.
+
+    So: strip the offset rather than trust it, and never let a single
+    unparseable row decide what the rest of the report is allowed to measure.
+    """
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+
+
 def _open_during(gap_start, gap_end, state):
     """Positions that were open across a downtime gap, from state.json.
 
@@ -247,15 +272,10 @@ def _open_during(gap_start, gap_end, state):
     out = []
     for t in list(state.get("closed_trades", [])) + list(
             state.get("tracked", {}).values()):
-        try:
-            op = datetime.fromisoformat(str(t["opened_at"]).replace("Z", ""))
-        except Exception:
+        op = _naive_utc(t.get("opened_at"))
+        if op is None:
             continue
-        cl = t.get("closed_at")
-        try:
-            cl = datetime.fromisoformat(str(cl).replace("Z", "")) if cl else None
-        except Exception:
-            cl = None
+        cl = _naive_utc(t.get("closed_at"))
         if op <= gap_end and (cl is None or cl >= gap_start):
             out.append((t.get("coin", "?"), "SHORT" if t.get("dir") == -1 else "LONG",
                         cl is None))
@@ -270,6 +290,28 @@ _CANDLE_LAG_RE = re.compile(
 # A candle header this far behind its own hour means the loop was blocked, not
 # merely busy: an ordinary pass logs the header ~10s past the hour.
 _LAG_BLOCKED_SEC = 300
+
+# Timestamped lines that say the EXCHANGE was unreachable during a stall.
+_VENUE_DOWN_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2}) \| (?:WARNING|ERROR) \| "
+    r"(?:HL API \d+|Cycle error)")
+
+
+def _stall_cause(due, wall, venue_events):
+    """Why the loop was late: the venue was down, or we blocked ourselves.
+
+    These are opposite risks and the report used to print both as "ratchet
+    frozen". When Hyperliquid 502s (2026-09-02 07:00, AAVE SHORT, 27.9 min) the
+    ratchet cannot advance -- but the STOP IS ALREADY RESTING ON THE EXCHANGE,
+    so the position is protected and only the upside is stalled, and there is
+    no code change on our side that prevents it. When we block ourselves
+    (2026-08-22..24, the inline nightly review) the venue is healthy, the loop
+    is simply not looking, and that IS ours to fix.
+
+    Conflating them invites a future session to "fix" an outage it does not own.
+    """
+    hits = sum(1 for t in venue_events if due <= t <= wall)
+    return ("venue down", hits) if hits else ("self-blocked", 0)
 
 
 def _loop_latency(logs=None, state=None):
@@ -295,10 +337,17 @@ def _loop_latency(logs=None, state=None):
     if logs is None:
         logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
     rows = set()
+    venue = []
     for path in logs:
         try:
             with open(path, errors="ignore") as fh:
                 for line in fh:
+                    v = _VENUE_DOWN_RE.match(line)
+                    if v:
+                        venue.append(datetime(
+                            int(v.group(1)[:4]), int(v.group(1)[5:7]),
+                            int(v.group(1)[8:10]), int(v.group(2)),
+                            int(v.group(3)), int(v.group(4))))
                     m = _CANDLE_LAG_RE.match(line)
                     if not m:
                         continue
@@ -331,8 +380,9 @@ def _loop_latency(logs=None, state=None):
         for wall, due, lag in sorted(rows):
             if lag <= _LAG_BLOCKED_SEC:
                 continue
+            cause, nerr = _stall_cause(due, wall, venue)
             for coin, side, still_open in _open_during(due, wall, state):
-                frozen.append((due, coin, side, lag))
+                frozen.append((due, coin, side, lag, cause, nerr))
     return by_hour, worst, frozen
 
 
@@ -340,6 +390,16 @@ def _loop_latency(logs=None, state=None):
 # TRAIL_START_R -> 2.50). Trades opened before this ran a materially different
 # exit and must not be pooled with the ones after it -- see _excursion_stats.
 EXIT_REGIME_FROM = "2026-08-05"
+
+
+def _maybe_r(roe_pct, lev, risk_pct):
+    """Leveraged ROE% -> R, preserving 'not recorded' as None rather than 0.0."""
+    if roe_pct is None:
+        return None
+    try:
+        return (float(roe_pct) / lev) / risk_pct
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
 
 
 def _excursion_stats(state):
@@ -372,8 +432,15 @@ def _excursion_stats(state):
             out.append({
                 "coin":   t.get("coin", "?"),
                 "opened": opened,
-                "mfe_r":  (float(t.get("peak_roe_pct")   or 0.0) / lev) / risk_pct,
-                "mae_r":  (float(t.get("max_adverse_pct") or 0.0) / lev) / risk_pct,
+                # None, NOT 0.0, when the tracker never recorded an excursion.
+                # `or 0.0` here silently asserted "this entry never went
+                # favourable" for the reconstructed OP 2026-08-13 record, which
+                # dragged the median MFE down, scored OP as a miss at every
+                # threshold, and printed a FALSE invariant violation against its
+                # real -1.09R exit. A measurement that was never taken is not a
+                # measurement of zero -- see [[mfe-not-realised-r]].
+                "mfe_r":  _maybe_r(t.get("peak_roe_pct"),    lev, risk_pct),
+                "mae_r":  _maybe_r(t.get("max_adverse_pct"), lev, risk_pct),
                 "real_r": (float(t.get("lev_pct")        or 0.0) / lev) / risk_pct,
                 # What the ratchet ACTUALLY locked, when the trade recorded it.
                 # Preferred over inferring arming from MFE: peak_roe_pct is
@@ -607,12 +674,19 @@ def full_report():
             if _frozen:
                 lines.append("  ⚠️  loop blocked >5min WITH A POSITION OPEN "
                              "(ratchet frozen):")
-                _tot = 0.0
-                for _due, _coin, _side, _lag in _frozen:
+                _tot = _ours = 0.0
+                for _due, _coin, _side, _lag, _cause, _nerr in _frozen:
                     _tot += _lag
+                    if _cause == "self-blocked":
+                        _ours += _lag
+                    _tag = (f"venue down ({_nerr} API errors) — stop was still "
+                            f"resting on the exchange" if _cause == "venue down"
+                            else "SELF-BLOCKED — venue was healthy, we were not "
+                                 "looking")
                     lines.append(f"    {_due:%Y-%m-%d %H:%M}  {_coin} {_side}"
-                                 f"  frozen {_lag/60:.1f} min")
-                lines.append(f"    total {_tot/60:.0f} min of unmanaged ratchet")
+                                 f"  frozen {_lag/60:.1f} min  [{_tag}]")
+                lines.append(f"    total {_tot/60:.0f} min frozen, of which "
+                             f"{_ours/60:.0f} min was OURS to prevent")
             lines.append("  (blocking maintenance was moved BELOW position "
                          "management 2026-09-02; entries on the delayed candle "
                          "are still affected — see test_review_order.py)")
@@ -922,16 +996,30 @@ def full_report():
     # The section above measures the exit. This one measures the entry, which
     # is the only way to tell the two apart. See _excursion_stats.
     exc = _excursion_stats(state)
-    if exc:
+    if exc and any(x["mfe_r"] is not None for x in exc):
         try:
             import strategy2 as _s2x
             arm_r = float(_s2x.TRAIL_START_R)
         except Exception:
             arm_r = None
-        mfes = sorted(x["mfe_r"] for x in exc)
+        # Trades whose excursion was actually RECORDED. A trade with a real
+        # realised R but a null peak_roe_pct still belongs in this section --
+        # dropping it would recreate the very under-count the coverage warning
+        # below exists to catch -- but it cannot contribute to a statistic
+        # about excursion it never measured.
+        meas   = [x for x in exc if x["mfe_r"] is not None and x["mae_r"] is not None]
+        unmeas = [x for x in exc if x not in meas]
+        mfes = sorted(x["mfe_r"] for x in meas)
         n    = len(mfes)
-        med  = mfes[n // 2] if n % 2 else (mfes[n // 2 - 1] + mfes[n // 2]) / 2
         lines.append(f"\n── EXCURSION: WHAT THE ENTRY OFFERED (n={n}) ──")
+        med  = mfes[n // 2] if n % 2 else (mfes[n // 2 - 1] + mfes[n // 2]) / 2
+        if unmeas:
+            lines.append("  ⚠️  excursion NOT RECORDED for "
+                         + ", ".join(f"{x['coin']} {x['opened']} "
+                                     f"(realised {x['real_r']:+.2f}R)"
+                                     for x in unmeas)
+                         + " — shown below but excluded from every statistic in "
+                           "this section; a null excursion is not a zero one")
 
         # Coverage reconciliation. This section reads state.json while every
         # section above reads journal.json, and the two can disagree: OP
@@ -944,7 +1032,7 @@ def full_report():
         ekeys = {(x["coin"], x["opened"]) for x in exc}
         missing = sorted(jkeys - ekeys)
         if missing:
-            lines.append(f"  ⚠️  covers {n} of {len(trades)} closed trades. "
+            lines.append(f"  ⚠️  covers {len(exc)} of {len(trades)} closed trades. "
                          f"Missing (no state record, excluded from every figure "
                          f"in this section): "
                          + ", ".join(f"{c} {d}" for c, d in missing))
@@ -959,10 +1047,11 @@ def full_report():
             def _armed(x):
                 if x["locked_r"] is not None:
                     return x["locked_r"] > 0
-                return x["mfe_r"] >= arm_r
-            armed    = [x for x in exc if _armed(x)]
+                # No lock recorded AND no MFE recorded: unknowable, not "no".
+                return x["mfe_r"] is not None and x["mfe_r"] >= arm_r
+            armed    = [x for x in meas if _armed(x)]
             inferred = sum(1 for x in armed if x["locked_r"] is None)
-            new      = [x for x in exc if x["regime"] == "new"]
+            new      = [x for x in meas if x["regime"] == "new"]
             new_arm  = [x for x in new if _armed(x)]
             lines.append(f"  live TRAIL_START_R={arm_r:g} armed in {len(armed)}/{n} "
                          f"trades ({len(armed)/n*100:.0f}%)"
@@ -975,6 +1064,11 @@ def full_report():
                              f"rate that describes the deployed system")
         lines.append("  per trade (MFE -> realised):")
         for x in exc:
+            if x["mfe_r"] is None or x["mae_r"] is None:
+                lines.append(f"    {x['coin']:<5} {x['opened']}  MFE   n/a  "
+                             f"MAE   n/a  ->  {x['real_r']:+5.2f}R  "
+                             f"(excursion never recorded)  [{x['regime']}]")
+                continue
             give = x["mfe_r"] - x["real_r"]
             lines.append(f"    {x['coin']:<5} {x['opened']}  MFE {x['mfe_r']:+5.2f}R  "
                          f"MAE {x['mae_r']:+5.2f}R  ->  {x['real_r']:+5.2f}R  "
@@ -996,8 +1090,12 @@ def full_report():
         # peak by a poll interval. Observed overshoot on the current book is
         # 0.01-0.02R. 0.10R sits well clear of that and still catches the real
         # thing by a mile -- the stop-denominator bug put SOL 1.50R over.
+        # Only rows that HAVE both bounds can violate a bound. Checking an
+        # unrecorded excursion coerced to 0.0 is how OP 2026-08-13 printed a
+        # violation for a year-normal stop-out: MAE +0.00, realised -1.09,
+        # MFE +0.00. The invariant was working; the input was fabricated.
         TOL = 0.10
-        bad = [x for x in exc
+        bad = [x for x in meas
                if x["real_r"] > x["mfe_r"] + TOL or x["real_r"] < x["mae_r"] - TOL]
         if bad:
             lines.append(f"  ⚠️  INVARIANT VIOLATED (MAE <= realised <= MFE, tol {TOL}R):")
@@ -1006,8 +1104,8 @@ def full_report():
                              f"realised {x['real_r']:+.2f} MFE {x['mfe_r']:+.2f} "
                              f"— excursion and realised R disagree on the stop")
         else:
-            lines.append(f"  invariant MAE <= realised <= MFE: OK on all {len(exc)} "
-                         f"(tol {TOL}R for poll sampling)")
+            lines.append(f"  invariant MAE <= realised <= MFE: OK on all {len(meas)} "
+                         f"measured (tol {TOL}R for poll sampling)")
         # Exit-regime split. Pooling these hides that the constants changed
         # underneath the record on 2026-08-05.
         for lab, key in (("pre-" + EXIT_REGIME_FROM, "old"),
