@@ -2,7 +2,7 @@
 Live engine — scans 15 coins every 1h candle, fires on best setup.
 Includes: session filter, regime filter, trail stop, nightly/weekly review, trade journal.
 """
-import time, sys, json
+import time, sys, json, os
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 
@@ -18,11 +18,20 @@ from review  import (should_quiet, should_nightly_review, should_weekly_review,
 import tracker
 import tg
 import strategy2
+from io_safe import atomic_write_json
 
 logger.remove()
 logger.add(sys.stdout, format="<green>{time:HH:mm:ss}</green> | {message}", colorize=True)
-logger.add("bot.log", rotation="1 week", retention="4 weeks",
-           format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
+# Importing this module attaches the bot.log sink, so any test that imports it
+# writes into the PRODUCTION log -- and a test's fixture prices then read back as
+# real incidents. test_naked_stop asserts on a missing stop, so it was emitting
+# "[BTC] NO STOP RESTING on a live position" at ERROR into the same file the
+# nightly review reads for incidents. Four test files import live today; keying
+# off the entrypoint name covers every future one without each having to opt in.
+_IS_TEST_RUN = os.path.basename(sys.argv[0] or "").startswith("test_")
+if not _IS_TEST_RUN:
+    logger.add("bot.log", rotation="1 week", retention="4 weeks",
+               format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
 POLL   = 20       # seconds between polls
 TF     = "1h"     # primary timeframe
@@ -335,6 +344,31 @@ def _candle_ts():
 # TRAIL_R_STEP is defined in trader.py (tracker.py needs it too).
 
 
+# A signalled setup whose order never filled must not keep re-signalling. The
+# cooldown that already exists only fires on a stop-out, so a coin that cannot
+# be entered at all stayed eligible and re-signalled every candle: NEAR did it
+# twice on 2026-09-04 and would have continued for as long as its RSI stayed
+# extended. Long enough to break the loop, short enough that a transient book
+# does not cost a day.
+ENTRY_FAIL_COOLDOWN_S = 6 * 3600
+
+
+def _mark_entry_failed(coin, why=""):
+    """Cool a coin down after an entry that did not fill, and persist it so a
+    restart does not immediately retry."""
+    expiry = int(time.time()) + ENTRY_FAIL_COOLDOWN_S
+    _cooldown_until[coin] = expiry
+    try:
+        st = tracker.load_state()
+        st.setdefault("cooldowns", {})[coin] = expiry
+        tracker.save_state(st)
+    except Exception:
+        pass
+    logger.warning(f"{coin}: entry did not fill{(' — ' + why) if why else ''} "
+                   f"— cooled down for {ENTRY_FAIL_COOLDOWN_S // 3600}h, "
+                   f"no channel post")
+
+
 def _check_trail(positions, account_val, mids=None):
     """Ratchet SL up one rung per TRAIL_R_STEP of favourable excursion."""
     for coin, t in list(_open_trades.items()):
@@ -370,9 +404,28 @@ def _check_trail(positions, account_val, mids=None):
 
         locked = (rung - 1) * TRAIL_R_STEP
         new_sl = entry + direction * risk * locked
+
+        # Exchange first, record second -- the reverse of what this used to do.
+        # update_sl cancels the old stop before placing the new one and raises
+        # if the placement is rejected, so writing state up front left the bot
+        # believing in a stop that no order backed. Worse, trail_stage >= 1 also
+        # drops the position out of the at_risk count that enforces MAX_TRADES,
+        # so a naked position would stop consuming the risk budget too.
+        # _check_trail_s2 already has this ordering; S1 is dead today
+        # (S1_ENABLED = False) but must not be a trap when it comes back.
+        try:
+            update_sl(coin, direction, t["size"], new_sl, entry=entry)
+        except Exception as e:
+            logger.error(f"[{coin}] trail stop move failed — position "
+                         f"UNPROTECTED until retry: {e}")
+            if not t.get("naked_alerted"):
+                t["naked_alerted"] = True
+                tg.dm_owner(f"🚨 <b>{coin}</b>\nجابجایی استاپ ناموفق بود\n"
+                            f"پوزیشن تا تلاش بعدی بدون استاپ است")
+            continue
+        t.pop("naked_alerted", None)
         _open_trades[coin]["sl"] = new_sl
         _open_trades[coin]["trail_stage"] = rung
-        update_sl(coin, direction, t["size"], new_sl, entry=entry)
         tracker.update_trail(coin, new_sl, rung)
 
         label = "breakeven" if locked == 0 else f"+{locked:g}R"
@@ -450,6 +503,89 @@ def _check_trail_s2(positions, mids=None):
         )
 
 
+# ── Naked-position detection ─────────────────────────────────────────────────
+# One check per coin per 5 minutes. frontend_open_orders is rate-limited and the
+# main loop runs every POLL=20s, so checking every tick would spend the whole
+# budget on a question whose answer changes only when an order moves.
+STOP_VERIFY_INTERVAL_S = 300
+_stop_verified_at = {}
+
+
+def _verify_stops(positions):
+    """Confirm every open position actually has a stop resting on the exchange.
+
+    Nothing did this. get_stop_price() existed for exactly this purpose and was
+    called from one place -- _reconcile_stop, on restart only -- where it could
+    detect a stop at the WRONG price but never a MISSING one, because a failed
+    read and an absent order were both None.
+
+    The gap this closes: open_trade's bracket stop could be rejected while the
+    entry had already filled, and the position was then carried with the bot
+    believing in a stop no order backed. open_trade now aborts on that, but the
+    stop can also vanish afterwards -- a cancel that raced the ratchet, a manual
+    intervention, a venue-side expiry -- and this is the only thing that looks.
+
+    Never raises: this runs inside the position-management block, and a failure
+    here must not stop _check_closed or the ratchet from running.
+    """
+    now = time.time()
+    for coin, t in list(_open_trades.items()):
+        if coin not in positions:
+            continue
+        if now - _stop_verified_at.get(coin, 0) < STOP_VERIFY_INTERVAL_S:
+            continue
+        try:
+            real_sl = get_stop_price(coin)
+        except Exception as e:
+            # Could not look. Explicitly NOT treated as "no stop".
+            logger.debug(f"[{coin}] stop verify skipped: {e}")
+            continue
+        _stop_verified_at[coin] = now
+
+        if real_sl is not None and abs(real_sl - t["sl"]) <= 0.005 * real_sl:
+            if not t.get("stop_verified_once"):
+                t["stop_verified_once"] = True
+                logger.info(f"[{coin}] stop verified resting @ ${real_sl:.5g}")
+            t.pop("naked_alerted", None)
+            continue
+
+        if real_sl is None:
+            logger.error(f"[{coin}] NO STOP RESTING on a live position — "
+                         f"replacing at ${t['sl']:.5g}")
+            try:
+                update_sl(coin, t["dir"], t["size"], t["sl"], entry=t.get("entry"))
+            except Exception as e:
+                logger.error(f"[{coin}] stop replacement failed: {e}")
+                if not t.get("naked_alerted"):
+                    t["naked_alerted"] = True
+                    tg.dm_owner(
+                        f"🚨 <b>{coin} بدون استاپ است</b>\n"
+                        f"پوزیشن باز است ولی هیچ استاپی روی صرافی نیست\n"
+                        f"تلاش برای گذاشتن دوباره ناموفق بود\n"
+                        f"<code>{tg.esc(str(e)[:150])}</code>")
+                continue
+            t.pop("naked_alerted", None)
+            tg.dm_owner(f"⚠️ <b>{coin}</b>\nاستاپ روی صرافی نبود و دوباره گذاشته شد\n"
+                        f"<code>${t['sl']:.5g}</code>")
+            continue
+
+        # Same 0.5% band as _reconcile_stop: absorbs the tick rounding update_sl
+        # applies when it places a trigger (2684.3609 rests as 2684.4).
+        if abs(real_sl - t["sl"]) > 0.005 * real_sl:
+            logger.error(f"[{coin}] tracked stop ${t['sl']:.5g} disagrees with "
+                         f"the resting stop ${real_sl:.5g} — adopting the exchange")
+            old_sl = t["sl"]
+            t["sl"] = real_sl
+            R = t.get("R") or 0
+            if R > 0:
+                t["locked_r"] = max(0.0, round((real_sl - t["entry"]) * t["dir"] / R, 2))
+            tg.dm_owner(f"⚠️ <b>{coin}</b>\nاختلاف استاپ\n"
+                        f"ربات: <code>${old_sl:.5g}</code>\n"
+                        f"صرافی: <code>${real_sl:.5g}</code>\n"
+                        f"قیمت صرافی مبنا شد")
+        t.pop("naked_alerted", None)
+
+
 def _reconcile_stop(coin, restored, tracked):
     """Correct a restored stop that disagrees with the one resting on HL.
 
@@ -466,12 +602,15 @@ def _reconcile_stop(coin, restored, tracked):
     rather than trusted, because whatever corrupted one field had every chance
     to corrupt the other, and it is a pure function of entry/stop/R anyway.
 
-    A None from get_stop_price means "could not read", never "no stop", so it is
-    left alone. The 0.5% band absorbs the tick rounding update_sl applies when it
-    places a trigger (2684.3609 goes on the book as 2684.4) and is nowhere near
-    any disagreement worth acting on. Never raises: a restore that dies here
-    would orphan the position from the bot's own management, which is a strictly
-    worse failure than the one being guarded against.
+    get_stop_price now RAISES when it cannot read and returns None only when the
+    read succeeded and nothing is resting; both land in the except below and are
+    skipped here, because _verify_stops owns the missing-stop case and runs every
+    cycle anyway. This function's job is narrower: correct a restored stop that
+    is present but at the wrong price. The 0.5% band absorbs the tick rounding
+    update_sl applies when it places a trigger (2684.3609 goes on the book as
+    2684.4). Never raises: a restore that dies here would orphan the position
+    from the bot's own management, a strictly worse failure than the one guarded
+    against.
     """
     try:
         real_sl = get_stop_price(coin)
@@ -525,8 +664,7 @@ def _log_s2_close(coin, t, exit_px, lev_pct, hit, dur):
         "opened_at": t["opened_at"].isoformat(),
         "closed_at": datetime.utcnow().isoformat(),
     })
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    atomic_write_json(path, data, default=None)
 
     tg.dm_owner(_s2_report(header=(
         f"🧪 <b>[S2] {coin} closed {hit.upper()}</b>\n"
@@ -1095,6 +1233,9 @@ def run():
                 if S1_ENABLED:
                     _check_trail(positions, account_val, mids=mids)
                 _check_trail_s2(positions, mids=mids)
+                # After the ratchet, not before: a stop moved this cycle should
+                # be verified as the value the ratchet just placed.
+                _verify_stops(positions)
 
             # ── Blocking maintenance (runs AFTER the ratchet, see above) ───────
             # NOTE: the candle scan still sits BELOW this block, so the review
@@ -1201,6 +1342,16 @@ def run():
                     s2_open = {**positions, **{c: {} for c in _open_trades},
                                **{c: {} for c, exp in _cooldown_until.items() if int(time.time()) < exp}}
                     s2_best = strategy2.find_setup(s2_open)
+                    # Belt-and-suspenders: the cooldown was already threaded into
+                    # s2_open so find_setup should have excluded it — but NEAR
+                    # bypassed it on back-to-back candles (2026-09-04), burning
+                    # two signal numbers. Check _cooldown_until directly here,
+                    # before any log_signal or open_trade call, so a leaky
+                    # open_positions exclusion in find_setup cannot reach the
+                    # channel or the exchange.
+                    if s2_best and _cooldown_until.get(s2_best["coin"], 0) > int(time.time()):
+                        logger.info(f"[S2] {s2_best['coin']} on entry-fail cooldown — skipping")
+                        s2_best = None
                     # Logged even when empty: a scanner that only speaks when it
                     # fires is indistinguishable from a broken one, and this runs
                     # unattended for weeks while shadow data accumulates.
@@ -1230,20 +1381,30 @@ def run():
                             f"{abs(s2_best['stretch']):.1f} ATR from mean",
                             f"ADX {s2_best['adx']} (ranging, not trending)",
                         ]
+                        # Journal every setup that fired, filled or not -- that
+                        # record is what signal-quality analysis reads.
                         log_signal(c2, dir2, 0, reasons2, s2_best["entry"],
                                    s2_best["sl"], s2_best["tp"], strategy2.TF,
                                    adx=s2_best["adx"], rsi=s2_best["rsi"],
                                    ssl=None, session_hour=h,
                                    stretch=s2_best.get("stretch"))
-                        sig2, sig2_mid = tg.send_signal(
-                            coin=c2, direction=dir2, score=0, price=s2_best["entry"],
-                            sl=s2_best["sl"], tp=s2_best["tp"], reasons=reasons2,
-                            account_val=account_val, risk_usd=risk2,
-                            tf=strategy2.TF, leverage=s2_best["leverage"],
-                            strategy="S2",
-                            trail_start_r=strategy2.TRAIL_START_R,
-                        )
+                        if not res2:
+                            # The CHANNEL is a different matter. This used to
+                            # post unconditionally, before res2 was even
+                            # checked, so subscribers saw two NEAR signals on
+                            # 2026-09-04 for a trade that never opened -- and it
+                            # burned a signal number each time.
+                            _mark_entry_failed(c2)
                         if res2:
+                            sig2, sig2_mid = tg.send_signal(
+                                coin=c2, direction=dir2, score=0,
+                                price=s2_best["entry"],
+                                sl=s2_best["sl"], tp=s2_best["tp"],
+                                reasons=reasons2, account_val=account_val,
+                                risk_usd=risk2, tf=strategy2.TF,
+                                leverage=s2_best["leverage"], strategy="S2",
+                                trail_start_r=strategy2.TRAIL_START_R,
+                            )
                             hl2   = get_positions().get(c2, {})
                             entry2 = hl2.get("entry", res2["entry"])
                             size2  = abs(hl2.get("size", res2["size"]))
@@ -1321,19 +1482,28 @@ def run():
 
                     leverage = best.get("leverage", 10)
 
-                    sig_num, sig_msg_id = tg.send_signal(
-                        coin=best["coin"], direction=best["direction"],
-                        score=best["score"], price=best["price"],
-                        sl=best["sl"], tp=best["tp"],
-                        reasons=best["reasons"],
-                        account_val=account_val, risk_usd=risk_usd,
-                        tf=best.get("tf", TF), leverage=leverage,
-                    )
+                    # Order first, announce second. Announcing first posts a
+                    # signal for a trade that may never open -- the same defect
+                    # the S2 path had, which put two phantom NEAR signals in the
+                    # channel on 2026-09-04. S1 is disabled today; this must not
+                    # be waiting for it when it comes back.
                     result = open_trade(
                         coin=best["coin"], direction=best["direction"],
                         risk_usd=risk_usd, sl_price=best["sl"], tp_price=best["tp"],
                         leverage=leverage, tp_ratio=TP_RATIO,
                     )
+                    if not result:
+                        _mark_entry_failed(best["coin"])
+                    sig_num = sig_msg_id = None
+                    if result:
+                        sig_num, sig_msg_id = tg.send_signal(
+                            coin=best["coin"], direction=best["direction"],
+                            score=best["score"], price=best["price"],
+                            sl=best["sl"], tp=best["tp"],
+                            reasons=best["reasons"],
+                            account_val=account_val, risk_usd=risk_usd,
+                            tf=best.get("tf", TF), leverage=leverage,
+                        )
 
                     if result:
                         coin = best["coin"]
@@ -1375,7 +1545,7 @@ def run():
 
         except KeyboardInterrupt:
             logger.info("Bot stopped")
-            tg.send("⛔️ <b>Bot stopped</b>")
+            tg.send("⛔️ <b>ربات متوقف شد</b>\n⛔️ <b>Bot stopped</b>")
             break
         except Exception as e:
             logger.error(f"Cycle error: {e}")

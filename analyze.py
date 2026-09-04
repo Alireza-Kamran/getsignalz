@@ -5,6 +5,7 @@ Produces clean statistics the agent uses to make strategy decisions.
 import json, os, re, glob
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+from io_safe import atomic_write_json, atomic_write_text
 
 JOURNAL_F = "/root/trade/journal.json"
 STATE_F   = "/root/trade/state.json"
@@ -34,8 +35,7 @@ def load_config():
 
 def save_config(cfg):
     cfg["last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    with open(CONFIG_F, "w") as f:
-        json.dump(cfg, f, indent=2)
+    atomic_write_json(CONFIG_F, cfg, default=None)
 
 
 def _entry_stop(t):
@@ -1590,8 +1590,9 @@ def apply_config_to_trader():
     code = re.sub(r'^MIN_SCORE\s*=\s*\d+', f'MIN_SCORE   = {config["min_score"]}',
                   code, flags=re.MULTILINE)
 
-    with open(trader_path, "w") as f:
-        f.write(code)
+    # trader.py is being rewritten in place: a torn write here leaves the bot
+    # unable to import its own strategy module on the next restart.
+    atomic_write_text(trader_path, code)
 
     return f"Applied: MIN_SCORE={config['min_score']}, WATCHLIST={len(config['watchlist'])} coins"
 

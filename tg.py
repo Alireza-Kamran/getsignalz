@@ -199,11 +199,22 @@ def dm_owner_file(path, caption=""):
 
 # ── Signal post — single message, three states ────────────────────────────────
 
+def send_version_update(version, changed_files=None, highlights=None):
+    """Announce a shipped version in the channel, short and bilingual.
+
+    version_push has always pushed to GitHub and then told only the owner, so
+    subscribers never saw that the bot was being improved. This is the public
+    half; the owner DM keeps the param/code-change counts and full detail.
+    """
+    import brand
+    return send(brand.version_update(version, changed_files, highlights))
+
+
 def send_signal(coin, direction, score, price, sl, tp, reasons,
                 account_val, risk_usd, tf="1h", leverage=10, strategy="S1",
                 trail_start_r=None):
     """Post the signal as 'waiting for entry'. Returns (sig_num, msg_id)."""
-    side     = "LONG 🟢" if direction == 1 else "SHORT 🔴"
+    side     = "LONG" if direction == 1 else "SHORT"
 
     sl_pct   = abs(price - sl) / price * 100
     tp_pct   = abs(tp - price) / price * 100
@@ -236,18 +247,38 @@ def send_signal(coin, direction, score, price, sl, tp, reasons,
             f"⚖️ R:R:    1 : {rr}\n\n"
         )
 
-    msg = (
-        f"<b>{coin} {side}  #Signal{num}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📍 <b>⏳ WAITING FOR ENTRY</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🧠 <i>{strat_name}</i>\n"
-        f"📊 {score_txt}{tf}  ·  <b>{leverage}x</b>\n"
-        f"💰 Entry:  <code>${price:.5g}</code>\n"
-        f"🛑 SL:     <code>${sl:.5g}</code>  →  <b>-{lev_loss:.1f}%</b>\n"
-        f"{exit_block}"
-        f"📋 <b>Confluence:</b>\n{reasons_txt}"
-    )
+    import brand
+    rows = [("Entry", brand.fmt_px(price)),
+            ("Stop",  f"{brand.fmt_px(sl)}   -{lev_loss:.1f}%")]
+    if strategy == "S2" and trail_start_r:
+        # Strategy 2 does not exit at its take-profit and has not since
+        # 2026-08-02: the stop ratchet arms below the TP and cancels it, so the
+        # resting TP is a backstop against the bot dying mid-trade, not a target.
+        # Advertising it would print a goal every trade is designed to miss.
+        rows.append(("Arms at", f"+{trail_start_r:g}R"))
+        rows.append(("Backstop", f"{brand.fmt_px(tp)}   (cancelled on arming)"))
+        foot_fa = "خروج با استاپ متحرک، نه با تارگت ثابت"
+        foot_en = "Exit is a trailing stop, not a fixed target"
+    else:
+        rows.append(("Target", f"{brand.fmt_px(tp)}   +{lev_gain:.1f}%"))
+        rows.append(("R:R", f"1 : {rr}"))
+        foot_fa = "تارگت و حد ضرر از قبل مشخص است"
+        foot_en = "Target and stop are set in advance"
+
+    msg = "\n".join([
+        brand.mark_line(f"#Signal{num}"), "",
+        "⏳ <b>در انتظار ورود</b>",
+        "⏳ <b>Waiting for Entry</b>",
+        brand.rule(),
+        f"<b>{coin}  {side}  {leverage}×</b>  ·  <i>{strat_name}</i>",
+        f"<i>{score_txt}{tf}</i>" if score_txt else f"<i>{tf}</i>",
+        "",
+        brand.numeric_block(rows),
+        f"📋 <b>Confluence</b>\n{reasons_txt}",
+        brand.rule(),
+        f"🧠 {foot_fa}",
+        f"🧠 {foot_en}",
+    ])
     msg_id = send(msg)
     return num, msg_id
 

@@ -10,6 +10,8 @@ from journal import get_today_summary, get_week_summary, compact
 from analyze import health_score
 import tg
 from config import TELEGRAM_TOKEN as TOKEN, TELEGRAM_CHANNEL as CHANNEL
+import brand
+from io_safe import atomic_write_json, atomic_write_text
 
 REVIEW_STATE = "/root/trade/.review_msg_id"
 
@@ -57,10 +59,10 @@ def nightly_review():
 
     if s["trades_closed"] == 0 and s["signals_fired"] == 0:
         msg = (
-            f"🌙 <b>Daily Review — {now}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"No trades today — no high-confluence setups found.\n"
-            f"💤 Quiet hours: 02–04 UTC"
+            brand.header("🌙", f"گزارش روزانه — {now}", f"Daily Report — {now}")
+            + "\n\nامروز معامله ای نبود\nهیچ موقعیت معتبری پیدا نشد"
+            + f"\n{brand.rule()}\n"
+            + "No trades today\nNo qualifying setup was found"
         )
     else:
         wr_e   = "🟢" if s["win_rate"] >= 50 else "🔴"
@@ -80,17 +82,23 @@ def nightly_review():
             f"{'+' if (t.get('lev_pct') or 0)>=0 else ''}{(t.get('lev_pct') or 0):.1f}%\n"
             for t in s["trades"]
         )
+        # Channel gets the headline only. The per-trade breakdown is owner
+        # detail: a subscriber cannot act on it and it made the one persistent
+        # review message the longest thing in the channel.
         msg = (
-            f"🌙 <b>Daily Review — {now}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Signals: <b>{s['signals_fired']}</b>  ·  "
-            f"Closed: <b>{s['trades_closed']}</b> ({s['wins']}W/{s['losses']}L)\n"
-            f"{wr_e} Win rate: <b>{s['win_rate']:.0f}%</b>\n"
-            f"{tot_e} Today: <b>{'+' if s['total_lev_pct']>=0 else ''}{s['total_lev_pct']:.1f}%</b>\n"
-            + (f"\n{detail}" if detail else "") +
-            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"💤 Quiet hours: 02–04 UTC"
+            brand.header("🌙", f"گزارش روزانه — {now}", f"Daily Report — {now}")
+            + "\n" + brand.numeric_block([
+                ("Signals",  s["signals_fired"]),
+                ("Closed",   f"{s['trades_closed']}  ({s['wins']}W / {s['losses']}L)"),
+                ("Win rate", f"{s['win_rate']:.0f}%"),
+                ("Today",    f"{'+' if s['total_lev_pct']>=0 else ''}{s['total_lev_pct']:.1f}%"),
+            ])
         )
+        if detail:
+            tg.dm_owner(f"🌙 <b>Daily detail — {now}</b>\n"
+                        f"{wr_e} WR {s['win_rate']:.0f}%  {tot_e} "
+                        f"{'+' if s['total_lev_pct']>=0 else ''}{s['total_lev_pct']:.1f}%\n\n"
+                        f"{detail}")
 
     _post_or_edit(msg)
     _self_improve()
@@ -123,8 +131,8 @@ def _patch_trader(config):
     wl_str   = f'[\n    "{wl_items}"\n]'
     code = re.sub(r'WATCHLIST = \[.*?\]', f'WATCHLIST = {wl_str}', code, flags=re.DOTALL)
 
-    with open(path, "w") as f:
-        f.write(code)
+    # Same hazard as analyze._apply_config: this rewrites trader.py itself.
+    atomic_write_text(path, code)
 
 
 def _self_improve():
@@ -395,8 +403,7 @@ def _self_improve():
                     "losses":    len(losses),
                 },
             }
-            with open("/root/trade/.night_report.json", "w") as f:
-                json.dump(night_report, f)
+            atomic_write_json("/root/trade/.night_report.json", night_report, indent=None)
             version_push()   # push immediately while we have the full picture
         except Exception as rep_err:
             tg.dm_owner(f"⚠️ version push error: {rep_err}")
@@ -422,7 +429,11 @@ def weekly_review():
     now = datetime.now(timezone.utc).strftime("%d %b %Y")
 
     if not s:
-        _post_or_edit(f"📅 <b>Weekly Review — {now}</b>\nNo closed trades yet.")
+        _post_or_edit(
+            brand.header("📅", f"گزارش هفتگی — {now}", f"Weekly Report — {now}")
+            + "\n\nهنوز معامله بسته شده ای نیست"
+            + f"\n{brand.rule()}\n"
+            + "No closed trades yet")
         return
 
     wr_e  = "🟢" if s["win_rate"] >= 50 else "🔴"
@@ -436,18 +447,25 @@ def weekly_review():
     except Exception:
         trust_line = ""
 
+    # Same split as the nightly: headline to the channel, the signal-quality
+    # breakdown and the trust score to the owner. Those exist to steer tuning,
+    # not to inform a subscriber.
     msg = (
-        f"📅 <b>Weekly Review — {now}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Trades: <b>{s['total_trades']}</b>  ({s['wins']}W / {s['losses']}L)\n"
-        f"{wr_e} Win rate: <b>{s['win_rate']:.0f}%</b>\n"
-        f"📈 Avg win: <b>+{s['avg_win']:.1f}%</b>  ·  "
-        f"📉 Avg loss: <b>{s['avg_loss']:.1f}%</b>\n"
-        f"{tot_e} Week total: <b>{'+' if s['total_lev_pct']>=0 else ''}{s['total_lev_pct']:.1f}%</b>\n"
+        brand.header("📅", f"گزارش هفتگی — {now}", f"Weekly Report — {now}")
+        + "\n" + brand.numeric_block([
+            ("Trades",   f"{s['total_trades']}  ({s['wins']}W / {s['losses']}L)"),
+            ("Win rate", f"{s['win_rate']:.0f}%"),
+            ("Week",     f"{'+' if s['total_lev_pct']>=0 else ''}{s['total_lev_pct']:.1f}%"),
+        ])
+    )
+    tg.dm_owner(
+        f"📅 <b>Weekly detail — {now}</b>\n"
+        f"{wr_e} WR {s['win_rate']:.0f}%  ·  avg win +{s['avg_win']:.1f}%  ·  "
+        f"avg loss {s['avg_loss']:.1f}%\n"
+        f"{tot_e} Week {'+' if s['total_lev_pct']>=0 else ''}{s['total_lev_pct']:.1f}%\n"
         f"{trust_line}"
         f"\n✅ Best signals:\n{w_sig}\n"
-        f"❌ Signals in losses:\n{l_sig}"
-    )
+        f"❌ Signals in losses:\n{l_sig}")
     _post_or_edit(msg)
     removed = compact(keep_days=30)
     tg.dm_owner(f"🧹 Weekly compact: removed {removed} old records")
@@ -511,8 +529,7 @@ def version_push():
             patch += 1
 
         new_ver = f"{major}.{minor}.{patch}"
-        with open(VER_F, "w") as f:
-            f.write(new_ver + "\n")
+        atomic_write_text(VER_F, new_ver + "\n")
 
         # ── Build CHANGELOG entry ─────────────────────────────────────────────
         stats    = report.get("stats", {})
@@ -557,8 +574,7 @@ def version_push():
             new_content = existing[:split + 5] + "\n" + entry + existing[split + 5:]
         else:
             new_content = existing + "\n" + entry
-        with open(CHNG_F, "w") as f:
-            f.write(new_content)
+        atomic_write_text(CHNG_F, new_content)
 
         # ── Git commit + push ─────────────────────────────────────────────────
         def _git(*args):
@@ -592,6 +608,19 @@ def version_push():
                 f"  {len(param_changes)} param change{'s' if len(param_changes)!=1 else ''} · "
                 f"{len(ai_changes)} code improvement{'s' if len(ai_changes)!=1 else ''}"
             )
+            # The public half. Subscribers never saw that the bot was being
+            # improved -- version_push has always told only the owner. Bullets
+            # are derived from WHICH FILES changed (brand.highlights_for), never
+            # from the nightly model's own free text, so nothing unreviewed and
+            # untranslated can reach the channel.
+            try:
+                changed = _git("diff", "--name-only", "HEAD~1", "HEAD").stdout.split()
+            except Exception:
+                changed = []
+            try:
+                tg.send_version_update(new_ver, changed_files=changed)
+            except Exception as e:
+                tg.dm_owner(f"⚠️ version update post failed: {tg.esc(e)}")
         else:
             tg.dm_owner(f"⚠️ Git push failed: <code>{tg.esc(push.stderr[:300])}</code>")
 

@@ -6,6 +6,7 @@ Reviewed nightly and weekly to improve strategy.
 import json
 import os
 from datetime import datetime, timezone
+from io_safe import atomic_write_json
 
 JOURNAL_FILE = "/root/trade/journal.json"
 
@@ -18,8 +19,7 @@ def _load():
 
 
 def _save(data):
-    with open(JOURNAL_FILE, "w") as f:
-        json.dump(data, f, indent=2, default=str)
+    atomic_write_json(JOURNAL_FILE, data)
 
 
 def log_signal(coin, direction, score, reasons, price, sl, tp, tf,

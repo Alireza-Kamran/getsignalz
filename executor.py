@@ -97,6 +97,25 @@ def _hl_call(fn, *args, retries=4, **kwargs):
     return None
 
 
+def _order_ok(result):
+    """Did this order actually rest? Returns (ok, inner_status).
+
+    An outer {"status": "ok"} can carry an inner per-order error -- a rejected
+    trigger price, a reduce-only that would increase position, an undersized
+    order. Reading only the outer status reports those as successes. Every order
+    site in this file must go through here.
+    """
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        return False, result
+    try:
+        inner = result["response"]["data"]["statuses"][0]
+    except (KeyError, IndexError, TypeError):
+        return True, None          # ok outer, unparseable detail -- accept
+    if isinstance(inner, dict) and "error" in inner:
+        return False, inner
+    return True, inner
+
+
 def get_account_value():
     """Tradeable equity: perp account value plus spot USDC.
 
@@ -173,16 +192,17 @@ def get_stop_price(coin):
     only valid before the ratchet arms. Once a stop has ratcheted into profit it
     sits on the take-profit's side of entry and the side rule misreads it.
 
-    Returns None when there is no resting stop or the API call fails, so callers
-    must treat None as "unknown", never as "no stop".
+    Returns None ONLY when the read succeeded and no stop is resting -- which is
+    an actionable fact: the position is naked. An API failure RAISES instead, so
+    "I could not look" is never mistaken for "there is nothing there". These two
+    were both None until 2026-09-04, which is why nothing could detect a missing
+    stop; callers that only want the reconcile behaviour should catch and skip.
     """
     info, _ = _clients()
-    try:
-        orders = _hl_call(info.frontend_open_orders, ACCOUNT_ADDRESS)
-    except Exception as e:
-        logger.warning(f"Could not read resting orders for {coin}: {e}")
-        return None
-    for o in orders or []:
+    orders = _hl_call(info.frontend_open_orders, ACCOUNT_ADDRESS)
+    if orders is None:
+        raise RuntimeError(f"could not read resting orders for {coin}")
+    for o in orders:
         if o.get("coin") != coin or not o.get("reduceOnly"):
             continue
         if "stop" not in str(o.get("orderType", "")).lower():
@@ -232,6 +252,45 @@ def _round_sz(sz, coin=None):
     decimals = _sz_decimals(coin) if coin else 1
     factor = 10 ** decimals
     return math.floor(sz * factor) / factor
+
+
+# market_open sends an IOC limit this far from the mid. It is the cap on what
+# the entry will pay; anything beyond it does not fill and the order dies.
+ENTRY_SLIPPAGE = 0.01
+
+
+def book_crossable(coin, direction, slippage=ENTRY_SLIPPAGE):
+    """Can an IOC entry actually cross this book? Returns (ok, detail).
+
+    market_open(slippage=s) posts a limit at mid*(1-s) to sell or mid*(1+s) to
+    buy, so it fills only if the opposite side of the book is already inside
+    that band. On a wide book it never can, and the order is rejected with
+    "Order could not immediately match against any resting orders" -- which is
+    what happened to NEAR twice on 2026-09-04: a 4.02% spread against a 1% cap,
+    unfillable by construction. Checking first turns two failed orders and two
+    misleading channel posts into one logged skip.
+
+    Returns ok=True when the book cannot be read: a missing snapshot is not
+    evidence of a bad book, and refusing to trade on it would be worse.
+    """
+    info, _ = _clients()
+    try:
+        levels = _hl_call(info.l2_snapshot, coin).get("levels") or []
+        bid = float(levels[0][0]["px"])
+        ask = float(levels[1][0]["px"])
+    except Exception as e:
+        logger.warning(f"{coin}: order book unreadable ({e}) — proceeding")
+        return True, "book unreadable"
+    if bid <= 0 or ask <= 0 or ask <= bid:
+        return True, "book degenerate"
+    mid = (bid + ask) / 2
+    # the side the entry has to cross
+    need = (mid - bid) / mid if direction == -1 else (ask - mid) / mid
+    spread = (ask - bid) / mid
+    ok = need <= slippage
+    detail = (f"spread {spread*100:.2f}%, entry must cross {need*100:.2f}% "
+              f"against a {slippage*100:.2f}% cap")
+    return ok, detail
 
 
 def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ratio=2.0):
@@ -326,10 +385,25 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
         return None
 
     is_buy = direction == 1
+
+    crossable, book_detail = book_crossable(coin, direction)
+    if not crossable:
+        msg = (f"{coin}: order book too wide to enter — {book_detail}. "
+               f"An IOC entry cannot cross it, so the order would be rejected "
+               f"outright — skipped before sending")
+        logger.error(msg)
+        try:
+            import tg
+            tg.dm_owner(f"⚠️ <b>Entry skipped</b>\n{msg}")
+        except Exception:
+            pass
+        return None
+
     logger.info(f"Opening {'LONG' if is_buy else 'SHORT'} {sz} {coin} @ ~${price:.4f} | SL=${sl_price:.4f} TP=${tp_price:.4f}")
 
     # Market entry
-    result = exchange.market_open(coin, is_buy=is_buy, sz=sz, px=None, slippage=0.01)
+    result = exchange.market_open(coin, is_buy=is_buy, sz=sz, px=None,
+                                 slippage=ENTRY_SLIPPAGE)
     if result.get("status") != "ok":
         logger.error(f"Entry failed: {result}")
         return None
@@ -344,8 +418,15 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
     logger.info(f"Filled {actual_sz} {coin} @ ${entry_price:.4f}")
 
     # Recalculate SL/TP from actual fill price — price may have moved since signal
-    MAX_LEV_LOSS = 0.25   # max 25% leveraged loss at SL regardless of trade leverage
-    max_sl_pct   = MAX_LEV_LOSS / leverage   # e.g. 1.25% for 20x, 2.5% for 10x
+    # NOT the same constant as strategy2.MAX_LEV_LOSS, which is 20.0 and is
+    # expressed in PERCENT. This one is a FRACTION, so the two differ by 80x
+    # under identical names -- renamed here so a future edit cannot confuse them.
+    # This is a backstop, and under the deployed sizing it never fires:
+    # strategy2 picks leverage = min(20.0 / sl_pct, 25), which pins
+    # sl_pct * leverage at <= 20% against this 25% ceiling. It exists to catch a
+    # leverage figure that did NOT come from that formula.
+    MAX_LEV_LOSS_FRAC = 0.25
+    max_sl_pct        = MAX_LEV_LOSS_FRAC / leverage   # 1.25% at 20x, 2.5% at 10x
     original_tp_price = tp_price
     risk_dist = abs(entry_price - sl_price)
     if direction == 1 and sl_price >= entry_price:
@@ -359,7 +440,8 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
     if risk_dist > max_risk:
         risk_dist = max_risk
         sl_price = entry_price + risk_dist if direction == -1 else entry_price - risk_dist
-        logger.info(f"SL clamped to {max_sl_pct*100:.2f}% from fill ({leverage}x → max {MAX_LEV_LOSS*100:.0f}% risk): ${sl_price:.5f}")
+        logger.info(f"SL clamped to {max_sl_pct*100:.2f}% from fill "
+                    f"({leverage}x → max {MAX_LEV_LOSS_FRAC*100:.0f}% risk): ${sl_price:.5f}")
     min_tp = entry_price + direction * risk_dist * tp_ratio
     tp_price = max(original_tp_price, min_tp) if direction == 1 else min(original_tp_price, min_tp)
     logger.info(f"Adjusted SL=${sl_price:.5f} TP=${tp_price:.5f} (R:R 1:{tp_ratio})")
@@ -367,28 +449,63 @@ def open_trade(coin, direction, risk_usd, sl_price, tp_price, leverage=10, tp_ra
     # Place SL order
     # LONG SL = SELL stop: limit must be BELOW trigger (accept selling into the drop)
     # SHORT SL = BUY stop: limit must be ABOVE trigger (accept buying into the rise)
+    # The entry has FILLED by this point. If the protective stop does not rest,
+    # the position is naked and its loss is unbounded -- so a rejection here
+    # cannot be a warning.
+    #
+    # This block used to log `SL placement failed` and fall through to `return
+    # {...}`, which live.py:1245 and live.py:1337 both take as proof the trade is
+    # protected: they write res["sl"] into _open_trades and the bot then believes
+    # in a stop that no order backs. Nothing re-checked it afterwards.
+    #
+    # update_sl() was hardened against exactly this on the ratchet path and
+    # raises; the entry path never was. Retry twice, and if the stop still will
+    # not rest, flatten the position rather than carry it unprotected. A
+    # cancelled-out entry costs one round trip of taker fees; a naked position
+    # costs the account.
     slippage_buf = BRACKET_SLIP_CAP
     sl_trigger  = _px(sl_price)
     sl_limit_px = _px(sl_price * (1 - slippage_buf) if is_buy else sl_price * (1 + slippage_buf))
-    sl_result = exchange.order(
-        coin,
-        is_buy=not is_buy,
-        sz=actual_sz,
-        limit_px=sl_limit_px,
-        order_type={"trigger": {"triggerPx": sl_trigger, "isMarket": True, "tpsl": "sl"}},
-        reduce_only=True,
-    )
-    try:
-        inner_sl = sl_result["response"]["data"]["statuses"][0]
-        if "error" in inner_sl:
-            logger.warning(f"SL inner error for {coin}: {inner_sl['error']}")
-        else:
+    sl_inner = None
+    for attempt in range(3):
+        sl_result = exchange.order(
+            coin,
+            is_buy=not is_buy,
+            sz=actual_sz,
+            limit_px=sl_limit_px,
+            order_type={"trigger": {"triggerPx": sl_trigger, "isMarket": True, "tpsl": "sl"}},
+            reduce_only=True,
+        )
+        ok, sl_inner = _order_ok(sl_result)
+        if ok:
             logger.info(f"SL set at ${sl_price:.5f}")
-    except Exception:
-        if sl_result.get("status") == "ok":
-            logger.info(f"SL set at ${sl_price:.5f}")
-        else:
-            logger.warning(f"SL placement failed: {sl_result}")
+            break
+        logger.warning(f"SL placement rejected for {coin} "
+                       f"(attempt {attempt + 1}/3): {sl_inner}")
+        if attempt < 2:
+            time.sleep(1 + attempt)
+    else:
+        msg = (f"{coin}: protective stop REJECTED 3x after the entry filled "
+               f"({actual_sz} @ ${entry_price:.6g}) — closing the position "
+               f"rather than running it unprotected. Last error: {sl_inner}")
+        logger.error(msg)
+        closed_ok = False
+        try:
+            closed_ok = close_trade(coin).get("status") == "ok"
+        except Exception as e:
+            logger.error(f"{coin}: emergency close ALSO failed: {e}")
+        try:
+            import tg
+            tg.dm_owner(
+                f"🚨 <b>پوزیشن بدون استاپ بسته شد</b>\n"
+                f"<b>{coin}</b>\n"
+                f"سفارش استاپ سه بار رد شد\n"
+                + (f"پوزیشن بسته شد\n" if closed_ok else
+                   f"⚠️ بستن هم ناموفق بود — دستی چک کن\n")
+                + f"<code>{tg.esc(str(sl_inner)[:150])}</code>")
+        except Exception:
+            pass
+        return None
 
     # TP order — use isMarket:False (more reliable across coins)
     tp_trigger  = _px(tp_price)
@@ -516,15 +633,7 @@ def update_sl(coin, direction, sz, new_sl, entry=None):
     # outer "ok" can mask an inner error, see place_bracket); this one only
     # logged it, so a rejected ratchet stop would have been recorded as a
     # success and never retried. Raise instead, and let the caller decide.
-    ok = result.get("status") == "ok"
-    inner = None
-    if ok:
-        try:
-            inner = result["response"]["data"]["statuses"][0]
-        except (KeyError, IndexError, TypeError):
-            inner = None
-        if isinstance(inner, dict) and "error" in inner:
-            ok = False
+    ok, inner = _order_ok(result)
     if not ok:
         raise RuntimeError(f"SL placement rejected for {coin}: {inner or result}")
 

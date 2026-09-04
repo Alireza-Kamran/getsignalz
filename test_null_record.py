@@ -32,6 +32,12 @@ import analyze
 
 PASS = FAIL = 0
 
+# Snapshot before anything is imported that could write. The guard at the bottom
+# exists to prove THIS TEST did not mutate the live book -- pinning it to a
+# literal count made it fail every time a real trade closed instead, which is
+# the opposite of a useful invariant.
+_LIVE_COUNT_AT_START = len(json.load(open("/root/trade/state.json"))["closed_trades"])
+
 
 def check(label, cond):
     global PASS, FAIL
@@ -183,7 +189,8 @@ except Exception:
 print("\n── the live book is untouched by this test ──")
 live = json.load(open("/root/trade/state.json"))
 check("state.json still parses", isinstance(live.get("closed_trades"), list))
-check("state.json trade count unchanged", len(live["closed_trades"]) == 18)
+check(f"state.json trade count unchanged ({_LIVE_COUNT_AT_START})",
+      len(live["closed_trades"]) == _LIVE_COUNT_AT_START)
 
 print(f"\ntest_null_record: {PASS}/{PASS + FAIL} passed")
 sys.exit(1 if FAIL else 0)

@@ -242,6 +242,30 @@ check("source: register_position records size_orig",
 check("source: thresholds are fractions, not notionals",
       "DUST_FRACTION = 0.10" in src and "PARTIAL_ALERT_FRACTION = 0.90" in src)
 
+
+# ── P&L must be booked on the size that was OPENED ───────────────────────────
+# Detecting the residue was only half the job. On the next restart t["size"] is
+# overwritten with the exchange's live size, which after a partial fill IS the
+# residue -- so close_position computed P&L from 2.7% of the position. BTC #96
+# was booked as -$0.20 when the fills say -$7.44, and every published dollar
+# figure inherited it. R and ROI% were unaffected (both size-independent),
+# which is exactly why it went unnoticed.
+import tracker as _tk
+_t = {"coin": "BTC", "dir": -1, "entry": 81944.1, "sl": 83456.68,
+      "sl_orig": 83456.68, "leverage": 20,
+      "size": 0.00013,          # the residue left after the stop swept the book
+      "size_orig": 0.00486}     # what was actually opened
+_sz = abs(_tk._num(_t.get("size_orig")) or _t.get("size") or 0)
+check("close_position sizes P&L from size_orig, not the residue", _sz == 0.00486)
+_pnl = round((83475.03 - 81944.1) * -1 * _sz, 2)
+check(f"which books the real loss ({_pnl}), not the residue's",
+      abs(_pnl + 7.44) < 0.02)
+check("source: close_position reads size_orig",
+      'abs(_num(t.get("size_orig")) or t.get("size") or 0)'
+      in open("/root/trade/tracker.py").read())
+check("_num coerces a str/None size without raising",
+      _tk._num("0.004") == 0.004 and _tk._num(None) == 0.0)
+
 # ── Report ───────────────────────────────────────────────────────────────────
 print(f"test_dust_close: {PASSED} passed, {len(FAILED)} failed")
 for f in FAILED:

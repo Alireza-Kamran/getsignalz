@@ -6,6 +6,62 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.47.0 — 2026-09-04 — CHANNEL VOICE, NAKED POSITIONS, AND NON-ATOMIC STATE
+
+Owner-driven session, not a nightly. Three pieces of work.
+
+**Result card rebuilt on Pillow.** The dollar figure was computed as
+`size * abs(exit_px - entry) * direction` — `abs()` destroys the outcome, so the sign that
+survived was only the sign of `direction`: every LONG printed "+$" and every SHORT "-$"
+regardless of result. **9 of 19 published cards carried the wrong sign**, including AAVE #95
+showing "+57.6%" beside "-$20.32", and losing longs advertised as profits. Fixed, and all 18
+cards with a stored `card_msg_id` were replaced in the channel with `editMessageMedia` (ids
+unchanged, nothing deleted). Card is now a 16:9 supersampled render with a price ladder;
+dust trades (|P&L| < $1) lead with dollars so a $0.20 loss no longer headlines as -37.4%.
+
+**Critical: a rejected entry stop left the position naked.** `open_trade` logged the
+rejection as a warning and returned the trade dict, which `live.py` took as proof of
+protection. `update_sl` had been hardened to raise for exactly this on the ratchet path; the
+entry path never was. Now retries twice, then flattens the position and DMs the owner.
+Added `_verify_stops` in the main loop (one check per coin per 5 min) — `get_stop_price` now
+raises on a failed read and returns None only for "nothing resting", so a missing stop is
+detectable at all, which it previously was not.
+
+**Critical: every state file was written non-atomically.** `open(path, "w")` truncates before
+writing, so a crash in that window empties `state.json` — the file holding all open
+positions, `closed_trades` and the stats. This had already happened once (the OP record).
+New `io_safe.py`: serialise, write to a same-directory tmp, fsync, `os.replace`, keeping one
+`.bak` generation. `load_state` now recovers from `.bak` and raises rather than silently
+returning an empty skeleton. Routed `state.json`, both journals, `strategy_config.json`,
+VERSION, CHANGELOG and the two sites that rewrite `trader.py` through it.
+
+**Channel voice.** New `brand.py`: one house style, Persian and English never sharing a line
+(Telegram runs bidi per line and reorders mixed content), figures in `<pre>` blocks. Version
+updates now post publicly — bullets derived from *which files changed*, never from the
+nightly model's free text, so nothing unreviewed reaches subscribers. Daily/weekly reviews
+trimmed to a headline; their detail moved to the owner DM.
+
+**Also:** tests that import `live` were writing into the production `bot.log` — a new test
+asserting on a missing stop emitted `[BTC] NO STOP RESTING` at ERROR into the file the
+nightly review reads for incidents. The file sink is now skipped when the entrypoint is a
+`test_*` script. `test_null_record`'s live-trade-count guard was pinned to the literal 18 and
+failed on every real close; it now snapshots at start. Fixed a permission regression where
+`mkstemp` silently took `state.json` from 644 to 600.
+
+**Tests:** 10 files green. New: `test_naked_stop.py` (22), `test_atomic_state.py` (12),
+`test_brand.py` (31).
+
+---
+
+## v1.48.0 — 2026-09-04
+
+**Stats:** 19 trades · WR: 42% · P&L: +133.5%
+
+**Code improvements (1):**
+- live.py: NEAR SHORT re-signalled on two consecutive candles despite a 6-hour entry-fail cooldown being set in _cooldown_until and threaded into s2_open. strategy2.find_setup() returned the coin anyway. This guard checks _cooldown_until directly in live.py — where it is authoritative and in-memory — immediately after find_setup() returns and before log_signal or open_trade is called, so no cooldown bypass can burn a signal number or send an order the exchange will reject.
+
+---
+
 ## v1.46.0 — 2026-09-04 — THE STOP FIRED, FILLED 97%, AND THE TRADE STAYED OPEN
 
 **Stats:** live n=19 (was reported as 18), WR 42.1%, sumR +4.57, avgWin +1.922R,

@@ -20,6 +20,8 @@ from trader import WATCHLIST, TRAIL_R_STEP
 import strategy2
 import analyze
 import tg
+import brand
+from io_safe import atomic_write_json, read_json_with_fallback
 CHANNEL_USERNAME = CHANNEL.lstrip("@")
 BASE     = f"https://api.telegram.org/bot{TOKEN}"
 STATE_F  = "/root/trade/state.json"
@@ -36,10 +38,28 @@ _running = False
 # ── State persistence ─────────────────────────────────────────────────────────
 
 def load_state():
+    """Read the book, recovering from the .bak generation if the primary is torn.
+
+    A corrupt read used to fall through to the empty skeleton below, which reads
+    to every caller as "no open positions and no history" -- the bot would then
+    happily open new trades on top of positions it had forgotten and rewrite the
+    stats from zero. Only an ABSENT file may produce the skeleton; an unreadable
+    one is escalated and raises.
+    """
     with _lock:
-        if os.path.exists(STATE_F):
-            with open(STATE_F) as f:
-                return json.load(f)
+        if os.path.exists(STATE_F) or os.path.exists(STATE_F + ".bak"):
+            obj, source = read_json_with_fallback(STATE_F, logger=lambda m: print(f"[tracker] {m}"))
+            if obj is None:
+                raise RuntimeError(
+                    f"{STATE_F} and its backup are both unreadable — refusing to "
+                    f"continue with an empty book")
+            if source == "backup":
+                try:
+                    tg.dm_owner("⚠️ <b>state.json بازیابی شد</b>\n"
+                                "فایل اصلی خراب بود و از نسخه پشتیبان خوانده شد")
+                except Exception:
+                    pass
+            return obj
     return {
         "dashboard_msg_id": None, "signal_count": 1,
         "tracked": {}, "closed_trades": [],
@@ -51,10 +71,26 @@ def load_state():
     }
 
 
+def _num(v):
+    """Coerce to a positive float, or 0.0. Records written at different times
+    carry these fields as float, str or None."""
+    try:
+        return abs(float(v))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def save_state(s):
+    # Atomic: this file holds every open position, the full closed_trades list
+    # and the stats. See io_safe.atomic_write_json for why a plain open(...,"w")
+    # is not survivable here.
     with _lock:
-        with open(STATE_F, "w") as f:
-            json.dump(s, f, indent=2, default=str)
+        atomic_write_json(STATE_F, s)
+
+
+# Samples kept per open trade for the live sparkline. 120 x 60s = 2h at full
+# resolution; longer trades are downsampled by brand.spark when rendered.
+PRICE_SERIES_MAX = 120
 
 
 # ── Telegram helpers ──────────────────────────────────────────────────────────
@@ -81,6 +117,46 @@ def _send_photo(photo_bytes, caption=""):
     except Exception as e:
         print(f"[tracker] sendPhoto error: {e}")
         return None
+
+
+def _edit_photo(msg_id, photo_bytes, caption=""):
+    """Replace the image of an already-published card in place.
+
+    editMessageMedia rather than delete+repost: closed signal messages are the
+    channel's permanent trade journal and must keep their message ids and their
+    position in the history. Telegram rate-limits media edits harder than text
+    edits, so 429 is expected on a backfill and is honoured, not retried blind.
+    """
+    if not msg_id:
+        return False
+    media = json.dumps({"type": "photo", "media": "attach://photo",
+                        "caption": caption, "parse_mode": "HTML"})
+    for attempt in range(3):
+        try:
+            photo_bytes.seek(0)
+            r = requests.post(f"{BASE}/editMessageMedia",
+                data={"chat_id": CHANNEL, "message_id": msg_id, "media": media},
+                files={"photo": ("result.png", photo_bytes, "image/png")},
+                timeout=30)
+            d = r.json()
+            if d.get("ok"):
+                return True
+            desc = d.get("description", "")
+            if "not modified" in desc:
+                return True
+            if d.get("error_code") == 429:
+                time.sleep(min(d.get("parameters", {}).get("retry_after", 5), 30))
+                continue
+            if not tg.note_channel_failure(desc, f"card edit {msg_id}"):
+                print(f"[tracker] editMessageMedia {msg_id} failed: {desc}")
+            return False
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+                continue
+            print(f"[tracker] editMessageMedia {msg_id} error: {e}")
+            return False
+    return False
 
 
 def _edit(msg_id, text):
@@ -131,9 +207,15 @@ def _msg_link(msg_id):
 
 def _live_text(t, current_price, closed=False, close_result=None, final_pct=None,
                hl_roe=None, hl_pnl_usd=None, hl_leverage=None, hl_entry=None):
-    """
-    hl_roe, hl_pnl_usd, hl_leverage, hl_entry: live data from HL API.
-    When provided they override local calculations so the display matches HL exactly.
+    """The signal message, in all three of its states.
+
+    hl_roe, hl_pnl_usd, hl_leverage, hl_entry: live data from HL API. When
+    provided they override local calculations so the display matches HL exactly.
+
+    House style (brand.py): bilingual status, figures once in a <pre> table.
+    Persian and English never share a line -- Telegram runs the bidi algorithm
+    per line and reorders mixed content, which can move the sign to the wrong
+    end of a number.
     """
     coin      = t["coin"]
     direction = t["dir"]
@@ -143,13 +225,24 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
     sl        = _px(t["sl"])
     tp        = _px(t["tp"])
     leverage  = hl_leverage if hl_leverage is not None else t["leverage"]
-    sig_num   = t["signal_num"]
+    # The OP record rebuilt from journal.json during the 2026-09-02 stats audit
+    # carries no signal_num at all. Every reader has to survive the shapes the
+    # happy path does not write -- that is the whole lesson of test_null_record.
+    sig_num   = t.get("signal_num")
     opened_at = datetime.fromisoformat(t["opened_at"])
-    max_adv   = t.get("max_adverse_pct", 0.0)
-    max_dd    = t.get("max_drawdown_pct", 0.0)
-    peak_roe  = t.get("peak_roe_pct", 0.0)
+    # `or 0.0`, not a .get default: the reconstructed OP record carries these
+    # keys PRESENT but NULL, so a default never fires and the None flows into a
+    # comparison. Exactly the shape that took down four readers on 2026-09-03.
+    max_adv   = t.get("max_adverse_pct") or 0.0
+    peak_roe  = t.get("peak_roe_pct") or 0.0
+    locked_r  = t.get("locked_r") or 0.0
+    side      = "SHORT" if direction == -1 else "LONG"
 
-    side      = "LONG 🟢" if direction == 1 else "SHORT 🔴"
+    # R is measured off the ORIGINAL stop: once the ratchet moves the stop, the
+    # distance to it is no longer the risk that was actually taken.
+    sl_orig = t.get("sl_orig", t["sl"])
+    R = abs(entry - sl_orig) or None
+
     # A closed trade's duration is entry->exit, a fixed fact. Measuring to "now"
     # was only ever right because the message happened to be rendered the moment
     # the trade closed; re-rendering it later (a correction, a rebuild) inflated
@@ -160,102 +253,150 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
             ref = datetime.fromisoformat(str(t["closed_at"]).replace("Z", ""))
         except Exception:
             pass
-    dur_secs  = int((ref - opened_at).total_seconds())
-    dur_h     = dur_secs // 3600
-    dur_m     = (dur_secs % 3600) // 60
-    dur_str   = f"{dur_h}h {dur_m}m" if dur_h > 0 else f"{dur_m}m"
+    dur_str = brand.dur((ref - opened_at).total_seconds())
 
-    # Use HL's ROE (return on equity = PnL / margin) when available — matches HL UI exactly
+    def _r_of(price):
+        return f"{(price - entry) * direction / R:+.2f}R" if R else "—"
+
+    head = brand.mark_line(f"#Signal{sig_num}" if sig_num else "")
+    inst = f"<b>{coin}  {side}  {leverage}×</b>  ·  <i>{strat_tag}</i>"
+
+    if closed:
+        # Classify on realised P&L, never on which ORDER closed the trade. The
+        # ratchet cancels the take-profit at TRAIL_START_R, so under strategy 2
+        # every exit -- winners included -- arrives here as result="sl". Reading
+        # the label labelled profitable trades a neutral "CLOSED", and painted
+        # the cards red, until this was corrected.
+        pct = final_pct or 0
+        if close_result == "tp":
+            fa, en, emo = "تارگت زده شد", "Target Hit", "✅"
+        elif pct > 0:
+            fa, en, emo = "خروج با سود", "Trail Exit", "✅"
+        elif pct == 0:
+            fa, en, emo = "سر به سر", "Breakeven", "⚪️"
+        else:
+            fa, en, emo = "استاپ خورد", "Stop Hit", "❌"
+
+        usd = (current_price - entry) * direction * abs(t.get("size", 0) or 0)
+        rows = [("Entry", brand.fmt_px(entry)),
+                ("Exit",  brand.fmt_px(current_price)),
+                ("Result", _r_of(current_price)),
+                ("Duration", dur_str)]
+        if max_adv < 0:
+            rows.append(("Max drawdown", f"{max_adv:.1f}%"))
+
+        return "\n".join([
+            head, "",
+            f"{emo} <b>{fa}</b>", f"{emo} <b>{en}</b>",
+            brand.rule(), inst, "",
+            brand.hero(f"{'+' if pct >= 0 else ''}{pct:.1f}%   "
+                       f"({'+' if usd >= 0 else '-'}${abs(usd):,.2f})"),
+            brand.numeric_block(rows),
+        ])
+
+    # ── Open ────────────────────────────────────────────────────────────────
     if hl_roe is not None:
         lev_pnl = hl_roe * 100
     else:
-        raw_move = (current_price - entry) / entry * 100
-        lev_pnl  = raw_move * leverage * direction
+        lev_pnl = (current_price - entry) / entry * 100 * leverage * direction
 
     # Signed, not absolute: once the ratchet has moved a stop past entry the
     # stop represents LOCKED PROFIT, and rendering it as a loss (which the old
     # abs() did) tells the reader the exact opposite of the truth.
-    sl_lev_pct  = (sl - entry) / entry * 100 * leverage * direction
-    tp_lev_pct  = (tp - entry) / entry * 100 * leverage * direction
-    # Dynamic distance for the color indicator only
-    dist_to_sl  = abs(current_price - sl) / entry * 100 * leverage
+    sl_locked = (sl - entry) * direction > 0
 
-    pnl_emoji = "💹" if lev_pnl >= 0 else "💀"
-    bar_n     = min(int(abs(lev_pnl) / 3), 10)
-    bar       = "█" * bar_n + "░" * (10 - bar_n)
-    sl_locked = sl_lev_pct > 0          # stop sits in profit — trade cannot lose
-    sl_status = "🔒" if sl_locked else ("🟢" if dist_to_sl > 15 else "🟡" if dist_to_sl > 7 else "🔴")
-    tp_close  = " 🎯" if abs(current_price - tp) / entry * 100 * leverage < 5 else ""
-    if hl_pnl_usd is not None:
-        sign = "+" if hl_pnl_usd >= 0 else "-"
-        pnl_usd_s = f"  ({sign}${abs(hl_pnl_usd):.2f})"
-    else:
-        pnl_usd_s = ""
+    rows = [("Entry", brand.fmt_px(entry)),
+            ("Now",   brand.fmt_px(current_price)),
+            ("Stop",  f"{brand.fmt_px(sl)}   {_r_of(sl)}"
+                      + ("   locked" if sl_locked else "")),
+            ("Duration", dur_str)]
 
-    if closed:
-        is_profit = (final_pct or 0) >= 0
-        # Same correction as result_card: the ratchet cancels the TP, so a
-        # profitable trade still closes with close_result="sl" and used to be
-        # labelled a neutral "CLOSED" rather than the win it was.
-        if close_result == "tp":
-            status_line = "✅ TP HIT"
-            pnl_emoji   = "💹"
-        elif is_profit and (final_pct or 0) > 0:
-            status_line = "✅ TRAIL EXIT"
-            pnl_emoji   = "💹"
-        elif (final_pct or 0) == 0:
-            status_line = "⚪️ BREAKEVEN"
-            pnl_emoji   = "💹"
-        else:
-            status_line = "❌ STOP HIT"
-            pnl_emoji   = "💀"
-        pct_s = f"+{final_pct:.1f}%" if final_pct >= 0 else f"{final_pct:.1f}%"
-        # Dollar PnL from the position itself (entry→exit)
-        raw_dollar = (current_price - entry) * direction * abs(t.get("size", 0))
-        dollar_s   = f"  ({'+' if raw_dollar >= 0 else '-'}${abs(raw_dollar):.2f})"
-        dd_bits = []
-        if max_adv < 0:
-            dd_bits.append(f"📉 Max drawdown: <b>{max_adv:.1f}%</b>")
-        if peak_roe > 0:
-            dd_bits.append(f"📈 Peak: <b>+{peak_roe:.1f}%</b>")
-        adv_line = ("\n" + "   ·   ".join(dd_bits)) if dd_bits else ""
-        return (
-            f"<b>{coin} {side}  #Signal{sig_num}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📍 <b>{status_line}</b>  ·  <i>{strat_tag}</i>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Entry <code>${entry:.5g}</code> → Exit <code>${current_price:.5g}</code>\n"
-            f"Duration: {dur_str}\n\n"
-            f"{pnl_emoji} <b>{pct_s}</b>{dollar_s}{adv_line}"
-        )
-
-    live_bits = []
+    # Show a take-profit ONLY while one is actually resting. The S2 ratchet
+    # cancels the TP the moment it arms (live.py calls update_sl without
+    # `entry`, which drops every reduce-only order), so past that point this
+    # line advertised a target that no order could ever fill. tg.send_signal
+    # already refuses to print it for S2 for exactly this reason -- the two
+    # renderers disagreed, and this one was the wrong half.
+    tp_alive = strat != "S2" or locked_r <= 0
+    if tp_alive:
+        rows.insert(3, ("Target", f"{brand.fmt_px(tp)}   {_r_of(tp)}"))
     if peak_roe > 0:
-        live_bits.append(f"📈 Peak <b>+{peak_roe:.1f}%</b>")
+        rows.append(("Peak", f"+{peak_roe:.1f}%"))
     if max_adv < 0:
-        live_bits.append(f"📉 Max DD <b>{max_adv:.1f}%</b>")
-    adv_line = ("\n" + "  ·  ".join(live_bits)) if live_bits else ""
-    activity    = t.get("activity", [])
-    act_lines   = "\n".join(f"  · {a}" for a in activity[-4:])
-    act_section = f"\n━━━━━━━━━━━━━━━━━━━━━━━\n📋 <b>Activity:</b>\n{act_lines}" if act_lines else ""
-    return (
-        f"<b>{coin} {side}  #Signal{sig_num}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📍 <b>📡 IN POSITION</b>  ·  <i>{strat_tag}</i>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Entry  <code>${entry:.5g}</code>  ·  {leverage}x\n"
-        f"Now    <code>${current_price:.5g}</code>  ({dur_str})\n\n"
-        f"{pnl_emoji} <b>{'+' if lev_pnl>=0 else ''}{lev_pnl:.1f}%</b>{pnl_usd_s}  "
-        f"<code>[{bar}]</code>\n\n"
-        f"{sl_status} SL <code>${sl:.5g}</code>  "
-        f"<b>{'+' if sl_lev_pct >= 0 else ''}{sl_lev_pct:.1f}%</b>"
-        f"{'  <i>locked in</i>' if sl_locked else ''}\n"
-        f"🎯 TP <code>${tp:.5g}</code>  "
-        f"<b>{'+' if tp_lev_pct >= 0 else ''}{tp_lev_pct:.1f}%</b>{tp_close}{adv_line}"
-        f"{act_section}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Updates every 60s</i>"
-    )
+        rows.append(("Max drawdown", f"{max_adv:.1f}%"))
+
+    usd_s = ""
+    if hl_pnl_usd is not None:
+        usd_s = f"   ({'+' if hl_pnl_usd >= 0 else '-'}${abs(hl_pnl_usd):,.2f})"
+
+    # ── The instrument panel ────────────────────────────────────────────────
+    # A text message cannot be a web UI, but <pre> is monospace and
+    # space-preserving, which is enough for a real chart, a proportional price
+    # track and a sub-cell progress bar. See brand.py for why braille is not
+    # used despite being higher resolution.
+    panel = []
+
+    sp = brand.spark(t.get("price_series") or [], width=24)
+    if sp:
+        panel.append(f"  {sp}")
+
+    # Where price sits between the stop and the target, entry marked.
+    tgt = tp if tp_alive else (entry + direction * R * (locked_r or strategy2.TRAIL_START_R)) if R else tp
+    # Anchor the rail at stop -> target rather than min -> max. On a SHORT the
+    # target is BELOW the stop, so a min/max rail puts the stop on the right
+    # while the caption underneath says it is on the left. Passing them in
+    # trade order makes the fraction (v - sl) / (tgt - sl) come out right for
+    # both directions -- the span is simply negative for a short.
+    if sl != tgt:
+        rail = brand.track(sl, tgt, {sl: "┃", entry: "┼", current_price: "●"}, width=24)
+        right = "target" if tp_alive else "locked"
+        panel.append(f"  {rail}")
+        panel.append(f"  {'stop':<{24 - len(right)}}{right}")
+
+    # The bar measures progress to ARMING the risk-free stop -- not P&L. The
+    # old bar was min(|lev_pnl|/3, 10), which at 20x filled every cell on a 1.5%
+    # move and so read the same on every trade. This is the number a subscriber
+    # is actually waiting on, and it moves.
+    if R:
+        r_now = (current_price - entry) * direction / R
+        if sl_locked:
+            step = strategy2.TRAIL_STEP_R or 1
+            frac = max(0.0, (r_now - locked_r) / step)
+            label = "to next lock"
+        else:
+            frac = max(0.0, r_now / (strategy2.TRAIL_START_R or 1))
+            label = "to risk-free"
+        panel.append("")
+        panel.append(f"  {label}")
+        panel.append(f"  {brand.bar(min(frac, 1.0), 20)} {min(frac, 1.0)*100:3.0f}%")
+
+    panel_s = f"<pre>{chr(10).join(panel)}</pre>" if panel else ""
+
+    # Figures stay OUT of the Persian lines. "ریسک فری در 2.5R فعال میشود" puts a
+    # Latin R and a signed number inside an RTL run, which is the exact bidi
+    # hazard the house style exists to avoid -- so the threshold goes in the
+    # table, where it is left-to-right by construction, and the prose stays
+    # single-script in both languages.
+    if sl_locked:
+        foot_fa = "سود قفل شد — این معامله دیگر ضرر نمیدهد"
+        foot_en = "Profit locked — this trade cannot lose"
+    else:
+        rows.append(("Arms at", f"+{strategy2.TRAIL_START_R:g}R"))
+        foot_fa = "با رسیدن به حد تعیین شده، استاپ در سود قفل میشود"
+        foot_en = "The stop moves into profit once armed"
+
+    return "\n".join([
+        head, "",
+        "📡 <b>در پوزیشن</b>", "📡 <b>In Position</b>",
+        brand.rule(), inst, "",
+        brand.hero(f"{'+' if lev_pnl >= 0 else ''}{lev_pnl:.1f}%{usd_s}",
+                   _r_of(current_price)),
+        panel_s,
+        brand.numeric_block(rows),
+        brand.rule(),
+        f"{'🔒' if sl_locked else '🎯'} {foot_fa}",
+        f"{'🔒' if sl_locked else '🎯'} {foot_en}",
+    ])
 
 
 # ── Dashboard pinned message ───────────────────────────────────────────────────
@@ -374,28 +515,37 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
         def _money(v):
             return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
 
+        # Every figure the owner asked for stays -- this message is the
+        # shopfront and a stranger judges the strategy from it. What changed is
+        # the rendering: one monospace block instead of nine emoji-prefixed
+        # proportional lines whose columns never aligned, and which could not
+        # sit next to a Persian title without the bidi algorithm reordering them.
         stats_section = (
             f"📊 <b>PERFORMANCE</b>  <i>({len(closed)} closed{span_s})</i>\n"
-            f"  🎯 Win rate: <b>{wr:.1f}%</b>   ({wins}W / {losses}L)\n"
-            f"  ⚖️ Avg R:R: <b>{avg_rr:+.2f}R</b>   ·   Profit factor: <b>{pf:.2f}</b>\n"
-            f"\n"
-            f"  <b>With leverage:</b>  {'+' if lev_tot >= 0 else ''}{lev_tot:.1f}%  "
-            f"({_money(usd_tot)})\n"
-            f"  <b>No leverage:</b>    {'+' if raw_tot >= 0 else ''}{raw_tot:.2f}%  "
-            f"({_money(usd_tot)})\n"
-            f"\n"
-            f"  📈 Avg win: <b>+{avg_w:.1f}%</b>   ·   📉 Avg loss: <b>{avg_l:.1f}%</b>\n"
-            f"  🩸 Avg drawdown: <b>{avg_dd:.1f}%</b>   ·   Worst: <b>{worst_dd:.1f}%</b>\n"
-            f"  ⏱ Avg hold: <b>{avg_dur:.1f}h</b>\n"
-            f"\n🧠 <b>BY STRATEGY</b>\n"
+            + brand.numeric_block([
+                ("Win rate",     f"{wr:.1f}%   ({wins}W / {losses}L)"),
+                ("Avg R:R",      f"{avg_rr:+.2f}R"),
+                ("Profit factor", f"{pf:.2f}"),
+                ("",             ""),
+                ("With leverage", f"{'+' if lev_tot >= 0 else ''}{lev_tot:.1f}%   ({_money(usd_tot)})"),
+                ("No leverage",  f"{'+' if raw_tot >= 0 else ''}{raw_tot:.2f}%   ({_money(usd_tot)})"),
+                ("",             " "),
+                ("Avg win",      f"+{avg_w:.1f}%"),
+                ("Avg loss",     f"{avg_l:.1f}%"),
+                ("Avg drawdown", f"{avg_dd:.1f}%   worst {worst_dd:.1f}%"),
+                ("Avg hold",     f"{avg_dur:.1f}h"),
+            ])
+            + f"\n🧠 <b>BY STRATEGY</b>\n"
             f"{_strat_line('S1', 'Liquidity-Pool')}\n"
             f"{_strat_line('S2', 'Mean-Reversion')}"
         )
     else:
         stats_section = (
             f"📊 <b>TRACK RECORD</b>\n"
-            f"  {state.get('signal_count',1)-1} signals fired — building record\n"
-            f"  Avg drawdown: <b>{avg_dd:.1f}%</b>"
+            + brand.numeric_block([
+                ("Signals",      f"{state.get('signal_count',1)-1} fired — building record"),
+                ("Avg drawdown", f"{avg_dd:.1f}%"),
+            ])
         )
 
     try:
@@ -405,15 +555,15 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
         trust_section = ""
 
     return (
-        f"📌 <b>GETSIGNAL AI — DASHBOARD</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+        brand.header("📌", "داشبورد زنده", "Live Dashboard") + "\n"
+        f"{brand.rule()}\n"
         f"{open_section}\n\n"
         f"{bal_section}\n\n"
         f"{stats_section}\n\n"
         f"{trust_section}"
         f"🔬 Testnet  ·  {strategy2.TF} candles  ·  "
         f"{len(strategy2.WATCHLIST)} pairs  ·  Mean-Reversion\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{brand.rule()}\n"
         f"<i>Updated {now}</i>"
     )
 
@@ -662,20 +812,25 @@ def _loop():
                 # winner ran before the ratchet closed it.
                 peak = max(t.get("peak_roe_pct", 0.0), roe_pct)
                 dd   = peak - roe_pct
-                if (peak > t.get("peak_roe_pct", 0.0)
-                        or dd > t.get("max_drawdown_pct", 0.0)
-                        or roe_pct < t.get("max_adverse_pct", 0.0)):
-                    state2 = load_state()
-                    if coin in state2["tracked"]:
-                        tr = state2["tracked"][coin]
-                        tr["peak_roe_pct"] = round(peak, 2)
-                        tr["max_drawdown_pct"] = round(
-                            max(dd, tr.get("max_drawdown_pct", 0.0)), 2)
-                        # Kept alongside: still the right measure of how close a
-                        # trade came to its stop before working out.
-                        tr["max_adverse_pct"] = round(
-                            min(roe_pct, tr.get("max_adverse_pct", 0.0)), 2)
-                        save_state(state2)
+                # One read-modify-write per coin per tick, never two: this block
+                # now also records the price sample that feeds the sparkline in
+                # the live message, so it runs every tick rather than only when
+                # an excursion extreme moves. The excursion fields themselves are
+                # still only advanced when they actually change.
+                state2 = load_state()
+                if coin in state2["tracked"]:
+                    tr = state2["tracked"][coin]
+                    tr["peak_roe_pct"] = round(max(peak, tr.get("peak_roe_pct", 0.0)), 2)
+                    tr["max_drawdown_pct"] = round(
+                        max(dd, tr.get("max_drawdown_pct", 0.0)), 2)
+                    # Kept alongside: still the right measure of how close a
+                    # trade came to its stop before working out.
+                    tr["max_adverse_pct"] = round(
+                        min(roe_pct, tr.get("max_adverse_pct", 0.0)), 2)
+                    series = list(tr.get("price_series") or [])
+                    series.append(round(price, 8))
+                    tr["price_series"] = series[-PRICE_SERIES_MAX:]
+                    save_state(state2)
 
                 # Edit live message with HL-accurate data
                 msg_id = t.get("msg_id")
@@ -852,7 +1007,15 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
         lev_used = t.get("leverage") or 1
         entry_px = t.get("entry") or 0
         d        = t.get("dir", 1)
-        size     = abs(t.get("size") or 0)
+        # The size that was OPENED, not whatever is left at the moment the close
+        # is detected. A Hyperliquid stop is a stop-limit filled IOC: when the
+        # book inside its band is thinner than the order it fills what it can
+        # and cancels the rest. BTC 2026-09-03 filled 0.00473 of 0.00486 and
+        # left a residue, and on the next restart t["size"] was overwritten with
+        # the exchange's live size -- the residue. P&L then came out of 2.7% of
+        # the position: the trade was booked as -$0.20 when it really lost
+        # -$7.44, and every published statistic inherited that.
+        size     = abs(_num(t.get("size_orig")) or t.get("size") or 0)
         risk_px  = abs(entry_px - (t.get("sl_orig") or t.get("sl") or entry_px))
         _closed_dt = datetime.utcnow()
         _dur_h = 0.0
@@ -886,12 +1049,19 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
             # inflated duration, exactly as the text message did.
             closed_at = datetime.utcnow()
             duration_h = (closed_at - opened_at).total_seconds() / 3600
+            archived = next((r for r in state.get("closed_trades", [])
+                             if r.get("signal_num") == t.get("signal_num")), {})
             card = result_card.generate(
                 coin=coin, direction=t["dir"], entry=t["entry"], exit_px=exit_price,
                 sl=t["sl"], tp=t["tp"], lev_pct=lev_pct, result=result,
                 sig_num=t.get("signal_num", 0), opened_at=opened_at, closed_at=closed_at,
                 duration_h=duration_h, max_adverse=max_adverse,
                 leverage=t.get("leverage", 10), size=t.get("size", 0),
+                # Hand over the figures the archive row already computed rather
+                # than letting the card re-derive them from prices: rr must be
+                # measured against sl_orig, not the ratcheted stop.
+                rr=archived.get("rr"), pnl_usd=archived.get("pnl_usd"),
+                balance_before=t.get("balance_before"), sl_orig=t.get("sl_orig"),
             )
             card_mid = _send_photo(card, caption=f"#Signal{t.get('signal_num', 0)}  {coin}")
             # Stored so the card can be corrected later. Without it, fixing a

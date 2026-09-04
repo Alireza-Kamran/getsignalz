@@ -199,6 +199,23 @@ def build_df(coin, tf="1h", bars=1500):
     price_col = "real_close" if "real_close" in df.columns else "close"
     if len(df) >= 3 and df[price_col].iloc[-3:].nunique() == 1:
         return None
+
+    # The repeat test alone is not enough. On 2026-09-04 NEAR signalled twice an
+    # hour apart with byte-identical rsi/adx/stretch while its mid moved 2.5% --
+    # only TWO bars had repeated, so the three-bar rule passed, and the real
+    # problem was that the newest bar was a full candle behind the clock. Check
+    # the timestamp directly: a feed that has not printed the last candle is
+    # stale no matter what its values look like.
+    try:
+        import pandas as _pd
+        last = df.index[-1]
+        if isinstance(last, _pd.Timestamp):
+            age_h = (_pd.Timestamp.utcnow().tz_localize(None) - last).total_seconds() / 3600
+            bar_h = {"1h": 1, "4h": 4, "15m": 0.25, "5m": 1 / 12}.get(tf, 1)
+            if age_h > bar_h * 2.5:
+                return None
+    except Exception:
+        pass          # a missing or odd index must not block trading
     return df
 
 

@@ -53,3 +53,6 @@ claude_brain.py
 
 # dated safety backups from nightly self-learn sessions
 *.bak_*
+
+# io_safe keeps one .bak generation beside every file it writes
+*.bak
