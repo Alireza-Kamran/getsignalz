@@ -6,6 +6,56 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.46.0 — 2026-09-04 — THE STOP FIRED, FILLED 97%, AND THE TRADE STAYED OPEN
+
+**Stats:** live n=19 (was reported as 18), WR 42.1%, sumR +4.57, avgWin +1.922R,
+avgLoss -0.982R, EV +0.2405R, breakeven WR 33.8%, t=+0.67. **No S2 parameter changed** —
+every constant is owner-locked and t=+0.67 justifies moving none.
+
+**Last night's fixes verified.** The pinned dashboard is ALIVE: 0 `dashboard error` lines in
+the 711 log lines since the 09-03 02:09 restart, against 176 before it. The review ran exactly
+once (23:00:09 → 23:02:15). No new SELF-BLOCKED latency row.
+
+**THE FINDING — `sz != 0` is not the same as "position open".**
+BTC 2026-09-03 SHORT stopped out at 19:21:24 and the bot did not notice for **6.7 hours**.
+Hyperliquid's "Stop Market" is a stop-limit with a ~0.3% band filled IOC; the book inside that
+band was thinner than the order, so it swept five levels (83472 → 83514) for **0.00473 of
+0.00486** and left **0.00013 ($10.74)** resting. `executor.get_positions()` filters `if sz != 0`
+and `live._check_closed()` fires only when the coin is ABSENT from that dict — a residue is
+neither zero nor a position, so it falls through both and the trade becomes immortal.
+Confirmed against real candles: BTC's real high was **83750** vs a stop at **83456.68**,
+breached for four consecutive hours. All 18 prior closes filled to exactly zero.
+
+**The cost was never the $10:** a MAX_TRADES slot held forever (effective MAX_TRADES=1 for
+6.7h, during the first-ever concurrent pair); a -1.01R loss missing from every published
+statistic (n=18/WR 44.4%/EV +0.310R was really n=19/WR 42.1%/EV +0.2405R); a residue with no
+stop under it; and a report describing a $400 protected position that did not exist.
+
+**THE WORSE HALF.** `live.py`'s restore sets `size = abs(hl["size"])` and writes it back to
+state.json — **one restart** would have laundered the residue into "the size we opened"
+(0.00486 → 0.00013), making the ratio 1.00 and the dust undetectable forever. Same disease the
+repo already cured for the stop (the ratchet overwrote `sl`, hence `sl_orig`); `size` needed
+the identical immutable twin.
+
+**FIXED.** `tracker.register_position` and both `live.py` open sites record an immutable
+`size_orig`; the restore path reads it before `size` is overwritten and persists it. New
+`live._reconcile_dust()` runs ABOVE `_check_closed` (absence from `positions` is the only
+signal it reads) and above `_check_trail_s2`. Classifies by **fraction of size opened, never
+by notional** — $10 is dust on BTC and a whole position on DOGE. ≤10%: flatten and record the
+close (`get_close_fill` already size-weights every closing fill). 10–90%: a real position with
+no stop under it — logged and DMed, **deliberately not auto-resolved**.
+
+**ADDED.** `analyze.py` OPEN BOOK now asserts `MAE >= -1.00R`, the mirror of the existing
+locked-vs-MFE invariant on the loss side. Every closed-trade invariant PASSED that night
+because the trade was never recorded as closed; the open book had no invariant at all. It
+back-derives the breach price and prints $83,750.15 against a real candle high of 83,750.
+`test_dust_close.py` new, 40 assertions incl. the `size_orig` laundering regression.
+
+**Proven in production:** restart → `BTC: stop filled short — 0.00013 of 0.00486 (2.7%)` →
+`Closed BTC` → `[S2] CLOSED BTC | -37.4% | SL`. BTC flat, its stale TP auto-cancelled by the
+venue, ETH untouched with both stop and TP resting. Seven suites green; state files
+md5-identical across the run.
+
 ## v1.42.0 — 2026-09-01 — THE SESSION THAT SUPERVISES THE BOT FAILED 14 OF 40 TIMES
 
 **Stats:** live n=17, WR 41.2%, sumR +2.61, EV +0.153R, t=+0.42. Book flat since 08-25.

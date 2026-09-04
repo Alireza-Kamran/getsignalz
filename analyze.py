@@ -750,6 +750,27 @@ def full_report():
                              f"{_arm_r:.2f}R, peaked {_mfe:+.2f}R "
                              f"({_arm_r - _mfe:+.2f}R short); stop still "
                              f"at -1.00R")
+            # The mirror of the locked-vs-MFE invariant above, on the loss side,
+            # and it applies armed or not: the ratchet only ever moves a stop in
+            # our favour, so -1.00R is the worst any OPEN position can be showing.
+            # An open trade reporting MAE past its own stop means the stop was
+            # traded through and did not fully fill.
+            #
+            # This is exactly what BTC 2026-09-03 did -- MAE -1.19R against a
+            # stop at -1.00R -- and the report printed it as a healthy protected
+            # position for 6.7 hours. The stop had swept the book for 97.3% of
+            # the size at 19:21:24 and left 0.00013 BTC resting; `sz != 0` kept
+            # the coin in get_positions(), so _check_closed never fired. Every
+            # closed-trade invariant in this file passed, because the trade was
+            # never recorded as closed. The open book had no invariant at all.
+            if _mae < -1.0 - 0.05:
+                _breach = _ent + (_stop - _ent) * abs(_mae)
+                lines.append(
+                    f"    ‼️  INVARIANT VIOLATED: MAE {_mae:.2f}R is past the "
+                    f"stop at -1.00R (price reached ~${_breach:,.2f} vs stop "
+                    f"${_stop:,.2f}) yet the position is still open after "
+                    f"{_age:.1f}h — the stop filled SHORT. Check the residual "
+                    f"size against state.json and the resting orders.")
         except Exception as _e:
             lines.append(f"  {_c}: could not summarise ({_e})")
 

@@ -749,6 +749,15 @@ def register_position(coin, direction, entry, sl, tp, size, leverage, signal_num
         # -- must stay measured against the risk actually taken at entry, not
         # against wherever the stop was dragged to by the time it filled.
         "sl_orig": sl_orig if sl_orig is not None else sl,
+        # The ORIGINAL size, kept separate for the same reason as sl_orig above.
+        # `size` is rewritten from the live HL position on every restart, so a
+        # position the exchange has partly closed launders its residue into
+        # "the size we opened" the first time the bot restarts. That erases the
+        # only evidence a stop filled short. BTC 2026-09-03 stopped out at
+        # 19:21 filling 0.00473 of 0.00486 and left 0.00013 resting; measured
+        # against `size` after one restart that residue reads as a whole
+        # position and stays open forever.
+        "size_orig": size,
     }
     text = _live_text(t, entry)
     if signal_msg_id:

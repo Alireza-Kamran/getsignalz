@@ -10,7 +10,8 @@ from trader import (find_best_setup, quick_state, RISK_PCT, MAX_TRADES,
                     WATCHLIST, MIN_SCORE, TP_RATIO, TRAIL_R_STEP,
                     in_session, SESSION_START, SESSION_END)
 from executor import (get_account_value, get_positions, get_mids, open_trade,
-                      get_price, update_sl, get_close_fill, get_stop_price)
+                      get_price, update_sl, get_close_fill, get_stop_price,
+                      close_trade)
 from journal import log_signal, log_trade_open, log_trade_close
 from review  import (should_quiet, should_nightly_review, should_weekly_review,
                      nightly_review, weekly_review, version_push)
@@ -587,6 +588,103 @@ def _s2_report(header=""):
     )
 
 
+# A stop that fills 97% of a position leaves the rest resting, and the residue
+# is not zero -- so executor.get_positions() (`if sz != 0`) still reports the
+# coin as open and _check_closed() below, which closes a trade only when the
+# coin is ABSENT from that dict, never fires. Fraction of the size we opened,
+# not a dollar amount: the threshold has to mean the same thing on BTC and on
+# DOGE, and only the ratio does.
+DUST_FRACTION = 0.10
+# Between dust and whole is the dangerous middle: a real position remains, and
+# because the stop order was consumed by the partial fill, nothing is resting
+# under it. Too consequential to resolve unattended, so it escalates instead.
+PARTIAL_ALERT_FRACTION = 0.90
+
+
+def _num(v, default=0.0):
+    """float(v) that survives a null. See tracker.py:298 -- `.get(k, d)` returns
+    None when the key EXISTS holding null, so the default never fires and the
+    arithmetic downstream raises. Reached here through records written by hand.
+    """
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _reconcile_dust(positions):
+    """Treat a position the exchange has all-but-closed as closed.
+
+    Hyperliquid's "Stop Market" is really a stop-limit with a ~0.3% band, filled
+    IOC. When the resting book inside that band is thinner than the order, it
+    fills what it can and the remainder is cancelled with the position still
+    open. BTC 2026-09-03 19:21:24 is the first instance in 19 trades: the stop
+    swept five levels (83472 -> 83514) for 0.00473 of 0.00486 and left 0.00013,
+    worth $10.74. Every earlier close in the record filled to exactly zero,
+    which is why `sz != 0` had never been wrong before.
+
+    The cost of missing it is not the $10. The trade holds a MAX_TRADES slot
+    forever (the bot ran at an effective MAX_TRADES=1 for 6.7 hours), its -1.12R
+    never reaches the journal so every published statistic is overstated, and
+    the residue has no stop under it -- while the report still describes a $400
+    position protected at -1.00R.
+
+    Mutates `positions` so the callers below see the coin as gone.
+    """
+    for coin in list(_open_trades.keys()):
+        try:
+            if coin not in positions:
+                continue          # already absent; _check_closed handles it
+            t         = _open_trades[coin]
+            opened_sz = abs(_num(t.get("size_orig")) or _num(t.get("size")))
+            live_sz   = abs(_num(positions[coin].get("size")))
+            if opened_sz <= 0 or live_sz <= 0:
+                continue
+            frac = live_sz / opened_sz
+            if frac > PARTIAL_ALERT_FRACTION:
+                continue          # whole position still there, nothing to do
+
+            if frac > DUST_FRACTION:
+                # Deliberately NOT auto-resolved. Re-arming a stop, or flattening
+                # a position this size, is a trading decision on a leg the bot
+                # cannot price without knowing why the fill stopped short.
+                logger.error(
+                    f"{coin}: PARTIAL CLOSE — {frac*100:.1f}% of the position "
+                    f"remains ({live_sz} of {opened_sz}) and its stop was "
+                    f"consumed by the fill. NOT auto-resolved.")
+                tg.dm_owner(
+                    f"‼️ <b>{tg.esc(coin)} partially closed</b>\n"
+                    f"{frac*100:.1f}% still open ({live_sz} of {opened_sz}).\n"
+                    f"The stop order was consumed by the partial fill, so the "
+                    f"remainder is <b>unprotected</b>. Needs a manual decision.")
+                continue
+
+            # Dust. The stop fired; this is what it could not fill.
+            logger.warning(
+                f"{coin}: stop filled short — {live_sz} of {opened_sz} "
+                f"({frac*100:.1f}%) left resting. Flattening the residue and "
+                f"recording the trade as closed.")
+            try:
+                close_trade(coin)
+            except Exception as e:
+                # Non-fatal by design. The accounting below is correct either
+                # way; an unflattened residue costs funding and would blend its
+                # entry price into the next trade on this coin (0.03% on the
+                # BTC case), which is worth a DM but not worth dropping the
+                # close record over.
+                logger.error(f"{coin}: could not flatten residue ({e})")
+                tg.dm_owner(
+                    f"⚠️ <b>{tg.esc(coin)}</b> stopped out leaving a residue of "
+                    f"{live_sz} that could not be flattened: {tg.esc(str(e))}\n"
+                    f"The trade is recorded as closed. Clear the residue "
+                    f"manually or it will blend into the next {tg.esc(coin)} entry.")
+            positions.pop(coin, None)
+        except Exception as e:
+            # One malformed record must not stop the others being reconciled,
+            # and must never take the trading loop down. See analyze._naive_utc.
+            logger.error(f"{coin}: dust reconcile failed ({e})")
+
+
 def _exit_price(coin, t):
     """Price a closed trade actually exited at, falling back to the current mid.
 
@@ -840,6 +938,13 @@ def run():
                         "strategy":     t.get("strategy", "S1"),
                         "sl_orig":      t.get("sl_orig", t["sl"]),
                         "locked_r":     t.get("locked_r", 0.0),
+                        # Read BEFORE t["size"] is overwritten with the HL actual
+                        # below. Falling back to t["size"] is only correct on the
+                        # FIRST restart after a partial close -- after that the
+                        # residue has already been written back as the size -- so
+                        # the fallback is a migration for records opened before
+                        # size_orig existed, not a substitute for it.
+                        "size_orig":    _num(t.get("size_orig")) or _num(t.get("size")) or abs(hl["size"]),
                         "R":            abs(hl["entry"] - (t.get("sl_orig") or t["sl"])),
                     }
                     _reconcile_stop(coin, _open_trades[coin], t)
@@ -862,6 +967,11 @@ def run():
                         # lock badge stops advertising a profit that is not
                         # actually protected by any resting order.
                         t["sl"]       = _open_trades[coin]["sl"]
+                        # Backfill for records opened before size_orig existed.
+                        # Written here so the migration survives; t["size"] has
+                        # already been overwritten with the HL actual by now, so
+                        # this is the last point the original is still known.
+                        t["size_orig"] = _open_trades[coin]["size_orig"]
                         t["locked_r"] = _open_trades[coin]["locked_r"]
                 tracker.save_state(synced)
 
@@ -974,6 +1084,12 @@ def run():
             # the socket hang (07-28) and the quiet-hours gate (07-28) were the
             # other two -- and the rule it keeps teaching is that NOTHING blocking
             # may sit above position management.
+            # Ahead of _check_closed because it is what makes _check_closed fire:
+            # it removes all-but-closed positions from `positions`, and absence
+            # from that dict is the only signal _check_closed reads. Ahead of
+            # _check_trail_s2 for the same reason the ordering above matters --
+            # ratcheting a residue would move a stop for a trade that is over.
+            _reconcile_dust(positions)
             _check_closed(positions, account_val)
             if _open_trades:
                 if S1_ENABLED:
@@ -1142,6 +1258,9 @@ def run():
                                 # R is measured off the ORIGINAL stop, so the
                                 # ladder keeps its reference once the stop moves.
                                 "sl_orig": res2["sl"], "locked_r": 0.0,
+                                # See tracker.register_position: `size` tracks the
+                                # live HL position, `size_orig` is what we opened.
+                                "size_orig": size2,
                                 "R": abs(entry2 - res2["sl"]),
                             }
                             log_trade_open(c2, dir2, entry2, res2["sl"],
@@ -1231,6 +1350,7 @@ def run():
                             "opened_at": datetime.utcnow(), "trail_stage": 0,
                             "signal_num": sig_num, "balance_before": account_val,
                             "max_adverse_pct": 0.0,
+                            "size_orig": actual_size,
                         }
                         log_trade_open(coin, best["direction"], actual_entry,
                                        result["sl"], result["tp"], actual_size, actual_leverage)
