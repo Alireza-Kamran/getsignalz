@@ -226,7 +226,8 @@ def send_signal(coin, direction, score, price, sl, tp, reasons,
     num = _next_signal_num()
     # Strategy 2 has no confluence score -- its entries are threshold-based, so
     # printing "0/8" would read as a terrible signal rather than a different kind.
-    strat_name = "Mean-Reversion" if strategy == "S2" else "Liquidity-Pool"
+    import brand as _brand
+    strat_name = _brand.strategy_name(strategy)
     score_txt  = f"Score: {score}/8  ·  " if strategy == "S1" else ""
 
     # Strategy 2 does not exit at its take-profit and has not since 2026-08-02:

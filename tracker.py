@@ -220,7 +220,7 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
     coin      = t["coin"]
     direction = t["dir"]
     strat     = t.get("strategy", "S1")
-    strat_tag = "Mean-Reversion" if strat == "S2" else "Liquidity-Pool"
+    strat_tag = brand.strategy_name(strat)
     entry     = hl_entry if hl_entry is not None else t["entry"]
     sl        = _px(t["sl"])
     tp        = _px(t["tp"])
@@ -535,9 +535,15 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
                 ("Avg drawdown", f"{avg_dd:.1f}%   worst {worst_dd:.1f}%"),
                 ("Avg hold",     f"{avg_dur:.1f}h"),
             ])
-            + f"\n🧠 <b>BY STRATEGY</b>\n"
-            f"{_strat_line('S1', 'Liquidity-Pool')}\n"
-            f"{_strat_line('S2', 'Mean-Reversion')}"
+            # Only engines that have actually traded. The retired one was
+            # printing "— no closed trades yet —" under its own heading on the
+            # channel's most-read message, which reads as a second product that
+            # never works rather than as one that was switched off.
+            + "".join(
+                f"\n🧠 <b>BY STRATEGY</b>\n{_strat_line(tag, brand.strategy_name(tag))}"
+                for tag in ("S1", "S2")
+                if any(c.get("strategy", "S1") == tag for c in closed)
+            )
         )
     else:
         stats_section = (
@@ -562,7 +568,7 @@ def _dashboard_text(state, tracked_with_prices, current_balance=None):
         f"{stats_section}\n\n"
         f"{trust_section}"
         f"🔬 Testnet  ·  {strategy2.TF} candles  ·  "
-        f"{len(strategy2.WATCHLIST)} pairs  ·  Mean-Reversion\n"
+        f"{len(strategy2.WATCHLIST)} pairs  ·  {brand.strategy_name('S2')}\n"
         f"{brand.rule()}\n"
         f"<i>Updated {now}</i>"
     )
