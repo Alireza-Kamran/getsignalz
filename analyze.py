@@ -115,13 +115,20 @@ _SCAN_RE = re.compile(
 def _scan_census(logs=None):
     """Per-coin scan observations recovered from the bot logs.
 
-    Every hour the bot prints RSI/ADX for all 20 coins and then throws the
-    reading away unless it becomes a signal. That discarded stream is the only
+    Every hour the bot prints RSI/ADX per coin and then throws the reading
+    away unless it becomes a signal. That discarded stream is the only
     part of this system with real statistical power: 11 closed trades give a
     win-rate sigma of ~15pp, while the same window holds thousands of
     coin-observations. Both measurements below are things the trade journal
     physically cannot answer, because they are about the setups that never
     became trades.
+
+    HISTORY NOTE, and it matters when comparing coins: before 2026-09-05 the
+    bot's scan loop iterated the RETIRED S1 watchlist (12 coins) while the
+    engine traded strategy2.WATCHLIST (20), so ADA, BNB, BTC, FIL, LDO, NEAR,
+    TIA and XLM have NO observations at all before that date. Any per-coin rate
+    computed here is therefore a much shorter series for those eight, and any
+    cross-coin comparison spanning the boundary is comparing unequal windows.
 
     Returns {coin: [(timestamp, price, rsi, adx), ...]}.
     """
@@ -291,6 +298,36 @@ _CANDLE_LAG_RE = re.compile(
 # merely busy: an ordinary pass logs the header ~10s past the hour.
 _LAG_BLOCKED_SEC = 300
 
+# The startup banner. One per process start, so counting these counts restarts
+# -- which the latency section previously mistook for 50-minute loop stalls.
+_RESTART_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2}) \| INFO \| \s*GETSIGNAL AI")
+
+
+def _restarts(logs=None):
+    """Process starts per day, newest last. A restart is cheap (~5s) but not
+    free: it re-reads state.json, re-restores open trades, and re-prints the
+    current candle header. Nine of them in one afternoon (2026-09-04) is a
+    signal in its own right -- it just is not the signal the latency section
+    used to report it as."""
+    if logs is None:
+        logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
+    seen = set()
+    for path in logs:
+        try:
+            with open(path, errors="ignore") as fh:
+                for line in fh:
+                    m = _RESTART_RE.match(line)
+                    if m:
+                        seen.add((m.group(1), m.group(2), m.group(3), m.group(4)))
+        except OSError:
+            continue
+    per = defaultdict(int)
+    for d, *_ in seen:
+        per[d] += 1
+    return dict(per)
+
+
 # Timestamped lines that say the EXCHANGE was unreachable during a stall.
 _VENUE_DOWN_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2}) \| (?:WARNING|ERROR) \| "
@@ -312,6 +349,36 @@ def _stall_cause(due, wall, venue_events):
     """
     hits = sum(1 for t in venue_events if due <= t <= wall)
     return ("venue down", hits) if hits else ("self-blocked", 0)
+
+
+def _feed_quality_split(trades, stale):
+    """Join closed trades to their own coin's frozen-bar rate.
+
+    Returns (clean, dirty, unmeasured) where unmeasured is [(coin, R), ...] for
+    trades whose coin never appeared in the scan log.
+
+    Extracted from full_report and made to RETURN the leftovers rather than
+    drop them. The inline version did `s = stale.get(coin)` and skipped the
+    trade when it was None, with no counter: that silently discarded 6 of 19
+    closed trades (32% of the book, 5 of them losses, meanR -0.717) because
+    their coins were absent from the RETIRED S1 watchlist the scan loop used to
+    iterate. The exclusion had nothing to do with feed quality, and the
+    discarded cohort was worse than either published bucket -- so the reported
+    clean-vs-dirty gap was part real effect, part selection artifact.
+    """
+    clean, dirty, unmeasured = [], [], []
+    for t in trades:
+        r = _r_of(t)
+        if r is None:
+            continue
+        s = stale.get(t.get("coin"))
+        if not s:
+            unmeasured.append((t.get("coin"), r))
+        elif s[2] < 0.03:
+            clean.append(r)
+        else:
+            dirty.append(r)
+    return clean, dirty, unmeasured
 
 
 def _loop_latency(logs=None, state=None):
@@ -363,6 +430,31 @@ def _loop_latency(logs=None, state=None):
             continue
     if not rows:
         return {}, [], []
+
+    # Keep only the FIRST time the loop reached each candle hour.
+    #
+    # A process restart re-prints the header for the hour it starts in, so an
+    # hour served on time at HH:00:15 and then restarted at HH:49 produced a
+    # SECOND row reading "49 minutes late". Nothing was blocked for 49 minutes;
+    # the loop had already done that candle, and the restart itself costs ~5s.
+    #
+    # On 2026-09-04 the bot restarted seven times between 15:49 and 17:36 and
+    # twice more at 22:40/22:53, and this section reported NINE phantom stalls
+    # of 6-54 minutes each, every one labelled "SELF-BLOCKED — venue was
+    # healthy, we were not looking", inflating "OURS to prevent" to 494 min
+    # against a true figure of ~28. That matters beyond arithmetic: per the
+    # 2026-08-31 session, a health alarm that cries wolf gets read past, and
+    # this one sits directly above the numbers a session is meant to act on.
+    #
+    # First-arrival is also the definition this function documents ("how long
+    # after each hour the loop actually got round to that candle") -- the
+    # answer is when it first got there. Deduped here rather than at the
+    # regex so `venue` and the raw parse stay untouched.
+    first = {}
+    for wall, due, lag in rows:
+        if due not in first or wall < first[due][0]:
+            first[due] = (wall, due, lag)
+    rows = set(first.values())
 
     by_hour, buckets = {}, {}
     for wall, due, lag in rows:
@@ -671,9 +763,26 @@ def full_report():
                                  f"{over} nights >5min")
             else:
                 lines.append("  no hour runs systematically late ✓")
+            try:
+                _rs = _restarts()
+                _busy = sorted((d, n) for d, n in _rs.items() if n >= 3)[-5:]
+                if _busy:
+                    lines.append("  process restarts (a restart re-prints the "
+                                 "current candle header; not a stall):")
+                    for _d, _n in _busy:
+                        lines.append(f"    {_d}  {_n} restarts")
+            except Exception:
+                pass
             if _frozen:
-                lines.append("  ⚠️  loop blocked >5min WITH A POSITION OPEN "
-                             "(ratchet frozen):")
+                # NOT "ratchet frozen" since 2026-09-02: _reconcile_dust /
+                # _check_closed / _check_trail_s2 / _verify_stops all run ABOVE
+                # the maintenance block and above this scan, so a late candle
+                # header no longer means the ratchet stood still. What it still
+                # costs is ENTRY latency on that candle (live.py:1240-1248).
+                # Rows dated before 2026-09-02 did freeze the ratchet.
+                lines.append("  ⚠️  candle >5min late WITH A POSITION OPEN "
+                             "(before 2026-09-02: ratchet frozen; after: "
+                             "entries delayed, ratchet already ran):")
                 _tot = _ours = 0.0
                 for _due, _coin, _side, _lag, _cause, _nerr in _frozen:
                     _tot += _lag
@@ -1235,11 +1344,28 @@ def full_report():
             flat = [o for v in per.values() for o in v]
             span = f"{min(o[0] for o in flat)[:10]} → {max(o[0] for o in flat)[:10]}"
             lines.append(f"  window: {span}")
-            # The scan loop prints the S1 WATCHLIST only, so this covers those
-            # coins -- not all of strategy2's. Stated rather than glossed: the
-            # admitted-rate below is a sample of S2's universe, not a census.
+            # Coverage is stated by NAME, not as a ratio. Until 2026-09-05 the
+            # scan loop iterated the retired S1 watchlist (12 coins) while the
+            # engine traded 20, and this line read "12 of 20" -- true, quiet,
+            # and read past for three weeks. What it was hiding: the missing 8
+            # included BTC (4 trades, the worst record in the book) and NEAR
+            # (whose feed went stale on 09-04 and was caught by an exchange
+            # rejection rather than by FEED HEALTH below). live.py now logs the
+            # S2-only coins after the entry decision, so this gap closes going
+            # forward -- but the HISTORY stays one-sided, and a reader
+            # comparing coins needs to know which ones only started being
+            # observed tonight.
+            missing = [c for c in _s2c.WATCHLIST if c not in per]
             lines.append(f"  coverage: {len(per)} logged coins of "
                          f"{len(_s2c.WATCHLIST)} in the S2 watchlist")
+            if missing:
+                traded_missing = sorted({t.get("coin") for t in trades
+                                         if t.get("coin") in set(missing)})
+                lines.append(f"  ⚠️  NEVER OBSERVED: {', '.join(missing)}")
+                if traded_missing:
+                    lines.append(f"      of which these have TRADED: "
+                                 f"{', '.join(traded_missing)} — every band, "
+                                 f"census and feed figure below excludes them")
             for label, cand in (
                 ("long  (RSI<=%d)" % _s2c.RSI_OVERSOLD,
                  [o for o in flat if o[2] <= _s2c.RSI_OVERSOLD]),
@@ -1286,22 +1412,41 @@ def full_report():
                 # The trade record can answer that by joining each closed trade
                 # to its own coin's frozen rate. WATCHLIST is owner-locked, so
                 # this exists to hand Kamran evidence, not to act on it.
-                paired = []
-                for t in trades:
-                    r = _r_of(t)
-                    s = stale.get(t.get("coin"))
-                    if r is not None and s:
-                        paired.append((r, s[2]))
+                # `stale.get(coin)` returns None for any coin the scan loop
+                # never printed, and until 2026-09-05 the trade then fell out
+                # of `paired` with no counter and no warning. That dropped 6 of
+                # 19 closed trades -- 32% of the book, 5 of them losses,
+                # meanR -0.717 -- on a criterion (membership of the retired S1
+                # watchlist) with no connection whatsoever to feed quality. The
+                # discarded cohort was WORSE than either published bucket, so
+                # the clean-vs-dirty gap below was part real and part selection
+                # artifact. Never let a slice discard rows silently: report the
+                # remainder next to the result, so the reader can see how much
+                # of the separation the sample could have manufactured.
+                clean, dirty, unmeasured = _feed_quality_split(trades, stale)
+                paired = clean + dirty
                 if len(paired) >= 4:
-                    clean = [r for r, f in paired if f < 0.03]
-                    dirty = [r for r, f in paired if f >= 0.03]
-                    lines.append("  REALISED R BY FEED QUALITY (coins in the scan log only):")
+                    tot = len(paired) + len(unmeasured)
+                    lines.append(f"  REALISED R BY FEED QUALITY "
+                                 f"({len(paired)} of {tot} closed trades measurable):")
                     if clean:
                         lines.append(f"    clean (<3% frozen)   n={len(clean)}  "
                                      f"meanR:{sum(clean)/len(clean):+.3f}")
                     if dirty:
                         lines.append(f"    dirty (>=3% frozen)  n={len(dirty)}  "
                                      f"meanR:{sum(dirty)/len(dirty):+.3f}")
+                    if unmeasured:
+                        urs = [r for _, r in unmeasured]
+                        nl = sum(1 for r in urs if r <= 0)
+                        lines.append(
+                            f"    UNMEASURABLE (coin never logged) n={len(urs)}  "
+                            f"meanR:{sum(urs)/len(urs):+.3f}  "
+                            f"({nl} of {len(urs)} are losses): "
+                            f"{', '.join(f'{c} {r:+.2f}' for c, r in unmeasured)}")
+                        lines.append(
+                            f"    ⚠️  that is {len(urs)/tot*100:.0f}% of the book "
+                            f"excluded for a reason unrelated to feed quality — "
+                            f"the split above is contaminated by selection")
                     lines.append("    (n tiny and this is a post-hoc slice -- an "
                                  "accumulator, not a verdict)")
 

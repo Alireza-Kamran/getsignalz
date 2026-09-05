@@ -1437,6 +1437,67 @@ def run():
             except Exception as s2_err:
                 logger.error(f"[S2] error: {s2_err}")
 
+            # ── Observability for the coins the scan above cannot see ──────────
+            # The scan at the top of this candle iterates `WATCHLIST`, imported
+            # from trader.py -- the RETIRED S1 list of 12 -- while the engine
+            # trades strategy2.WATCHLIST (20). Eight live coins (ADA, BNB, BTC,
+            # FIL, LDO, NEAR, TIA, XLM) have therefore never printed a single
+            # RSI/ADX line, and every report section mined from this log was
+            # blind to them:
+            #   - FEED HEALTH could not see NEAR, whose candles went stale on
+            #     2026-09-04 (two signals an hour apart with byte-identical
+            #     rsi/adx/stretch). That was caught by an exchange rejection at
+            #     21:01, not by the table that exists to catch exactly it.
+            #   - REALISED R BY FEED QUALITY silently dropped 6 of 19 closed
+            #     trades -- 32% of the book, 5 of them losses, meanR -0.717,
+            #     including all four BTC trades, the worst record we have --
+            #     because `stale.get(coin)` returns None for an unlogged coin
+            #     and the trade just falls out of the sample. The exclusion
+            #     criterion was membership of a dead engine's watchlist, which
+            #     has nothing to do with feed quality.
+            #
+            # Deliberately placed BELOW the S2 entry decision: this costs one
+            # candle fetch per coin and must never sit between the signal and
+            # the order, where every added second is signal-to-fill drift (see
+            # the FIL sizing incident). The loop is idle for the rest of the
+            # hour, so here it costs nothing.
+            #
+            # Indicators are computed inline rather than via strategy2.build_df
+            # ON PURPOSE: build_df returns None when its own freshness guard
+            # trips, so routing through it would emit no row for precisely the
+            # coins whose feeds are worst -- the monitor would go blind exactly
+            # where it needs to see. Staleness is the report's judgement to
+            # make, not the fetch's to hide.
+            #
+            # Format matches analyze._SCAN_RE exactly, and reports real_close
+            # rather than the polled mid, so a frozen CANDLE reads as frozen
+            # (NEAR's mid moved 2.5% while its candle sat still).
+            try:
+                from indicators import fetch_candles as _fc, rsi as _rsi, adx as _adx
+                _covered = set(WATCHLIST)
+                for _c in strategy2.WATCHLIST:
+                    if _c in _covered:
+                        continue
+                    try:
+                        _df = _fc(_c, strategy2.TF, lookback_bars=600)
+                        if _df is None or len(_df) < strategy2.ADX_LEN + 50:
+                            logger.info(f"{_c:<6} no usable candles  [S2-only]")
+                            continue
+                        _pc = "real_close" if "real_close" in _df.columns else "close"
+                        _r = _rsi(_df["close"], strategy2.RSI_LEN).iloc[-1]
+                        _a = _adx(_df["high"], _df["low"], _df["close"],
+                                  strategy2.ADX_LEN)[0].iloc[-1]
+                        if _r != _r or _a != _a:      # NaN: not enough history
+                            logger.info(f"{_c:<6} indicators unavailable  [S2-only]")
+                            continue
+                        logger.info(f"{_c:<6} ${float(_df[_pc].iloc[-1]):.4f}  "
+                                    f"RSI {float(_r):.0f}  ADX {float(_a):.0f}"
+                                    f"  [S2-only]")
+                    except Exception as _ce:
+                        logger.warning(f"{_c}: observability scan failed ({_ce})")
+            except Exception as _oe:
+                logger.error(f"[S2] observability scan error: {_oe}")
+
             # Strategy 2 runs BEFORE the session gate below, deliberately.
             # That gate is a strategy-1 inheritance: S1 was a structural system
             # where session liquidity plausibly mattered. S2 was validated on

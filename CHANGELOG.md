@@ -53,6 +53,18 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.49.0 — 2026-09-05
+
+**Stats:** 19 trades · WR: 42% · P&L: +133.6%
+
+**Code improvements (4):**
+- live.py: observability pass for the 8 S2 coins the scan loop never logged (it iterated the retired S1 watchlist) - placed below the entry decision so it adds no signal-to-fill drift
+- analyze.py: the feed-quality split no longer discards trades silently - it was dropping 6 of 19 closed trades (32% of the book, 5 of them losses) on a criterion unrelated to feed quality
+- analyze.py: a process restart is no longer counted as a loop stall - 10 restarts on 09-04 produced 9 phantom SELF-BLOCKED rows and inflated 'ours to prevent' from 121 to 494 min
+- test_scan_coverage.py: 45 assertions pinning watchlist coverage, log-format round-trip and scan ordering
+
+---
+
 ## v1.48.0 — 2026-09-04
 
 **Stats:** 19 trades · WR: 42% · P&L: +133.5%
