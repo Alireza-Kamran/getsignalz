@@ -624,6 +624,101 @@ def _ratchet_slippage(state):
     return measured, gap
 
 
+def _stop_fill_quality(state):
+    """Did the ORIGINAL stop deliver the -1.00R it promised?
+
+    The counterpart to _ratchet_slippage, and it exists because that section
+    left an obvious question unasked. A stop placed at 1R from entry defines
+    the loss: realised should EQUAL -1.00R. Like the ratchet's lock, that is an
+    invariant, not a statistic -- the trade cannot choose to lose more than the
+    distance to its own stop, only the FILL can. So every R by which realised
+    falls below -1.00R is venue execution loss landing on losers, exactly as
+    the ratchet leak lands on winners.
+
+    Nothing measured this before 2026-09-06. EXIT MECHANISM pools all twelve
+    original-stop exits into a single meanR, and a mean near -1.00R is
+    indistinguishable there from twelve stops that each filled perfectly and
+    from twelve that missed by +-0.2R in cancelling directions. Only the
+    per-trade deviation separates those two worlds, and they imply opposite
+    fixes.
+
+    Classification is the whole difficulty. `locked_r is None and sl ==
+    sl_orig` looks like it identifies an untouched stop, but it also matches
+    the four pre-2026-08-16 winners whose trail moved without writing a lock
+    back to state (AVAX/ETH 08-01, BTC 08-03, AVAX 08-11) -- those exited up to
+    5.8% BEYOND their recorded stop, in profit. The disambiguator is sign: the
+    original stop is always adverse, so rr > 0 proves the trade ratcheted no
+    matter what the record says. Misclassifying those four would import +5.3R
+    of ratchet profit into a loss-side execution figure and invert its verdict.
+
+    `width_pct` is 1R expressed as a fraction of entry, and it is reported
+    because it is the conversion factor between the two other columns and the
+    reason they look inconsistent. A fill 0.09% past the trigger cost FIL
+    0.19R while a fill 0.61% past it cost ARB 0.15R -- not a contradiction, but
+    stops 0.48% and 4.37% wide. Venue slippage is priced in percent; edge is
+    counted in R; a tight stop converts the first into the second at a far
+    worse rate. Reporting the deviation in R alone invites tuning the stop
+    distance to fix what is really a spread cost.
+
+    Returns (measured, gap) where measured is
+    [{coin, opened, real_r, dev_r, adv_pct, width_pct}, ...] with dev_r
+    positive when the stop filled BETTER than it asked, and gap is
+    [(coin, opened, real_r), ...] for original-stop losers whose prices are
+    incomplete -- named rather than dropped, because a silent absence in an
+    execution-quality table reads as an absence of the problem.
+    """
+    measured, gap = [], []
+    for t in state.get("closed_trades", []):
+        try:
+            rr = t.get("rr")
+            if rr is None:
+                continue
+            rr = float(rr)
+            opened = str(t.get("opened_at", ""))[:10]
+
+            # Positive rr can only have come from a stop that moved, whether or
+            # not a lock was recorded. Excluded here and owned by
+            # _ratchet_slippage instead.
+            if rr >= 0:
+                continue
+            locked = t.get("locked_r")
+            if locked is not None and float(locked) > 0:
+                continue
+
+            coin = t.get("coin", "?")
+            try:
+                entry = float(t["entry"])
+                trig  = float(t["sl"])
+                orig  = float(t.get("sl_orig", trig))
+                fill  = float(t["exit"])
+                d     = int(t["dir"])
+            except (KeyError, TypeError, ValueError):
+                gap.append((coin, opened, rr))
+                continue
+            # A stop the ratchet has already moved is not the original stop,
+            # even when locked_r is missing.
+            if abs(trig - orig) > 1e-12 or entry <= 0 or trig <= 0:
+                gap.append((coin, opened, rr))
+                continue
+
+            width = abs(entry - orig) / entry
+            if width <= 0:
+                gap.append((coin, opened, rr))
+                continue
+
+            # Signed so that positive always means "filled worse than the stop
+            # asked for", matching _ratchet_slippage's adv_pct convention.
+            adv = ((trig - fill) if d == 1 else (fill - trig)) / trig
+
+            measured.append({
+                "coin": coin, "opened": opened, "real_r": rr,
+                "dev_r": rr + 1.0, "adv_pct": adv, "width_pct": width,
+            })
+        except (TypeError, ValueError):
+            continue
+    return measured, gap
+
+
 SELFLEARN_LOG = "/root/trade/selflearn.log"
 
 
@@ -1121,6 +1216,80 @@ def full_report():
                          + ", ".join(f"{c} {o} {r:+.2f}R" for c, o, r in _slip_gap))
     except Exception as _e:
         lines.append(f"\n── RATCHET SLIPPAGE ──\n  slippage check failed: {_e}")
+
+    # ── Stop fill quality ──────────────────────────────────────────
+    # The section above asks whether winners delivered what was locked. This
+    # one asks the same question of losers, and the two answers are not the
+    # same. See _stop_fill_quality.
+    try:
+        _sf, _sf_gap = _stop_fill_quality(state)
+        if _sf or _sf_gap:
+            lines.append("\n── STOP FILL QUALITY (original stop vs its -1.00R promise) ──")
+        if _sf:
+            for x in sorted(_sf, key=lambda v: v["opened"]):
+                lines.append(
+                    f"  {x['coin']:<5} {x['opened']}  realised {x['real_r']:+.3f}R  "
+                    f"vs -1.000R  dev {x['dev_r']:+.3f}R   "
+                    f"fill {x['adv_pct']*100:+.3f}% vs trigger   "
+                    f"1R = {x['width_pct']*100:.2f}% of entry")
+            _n    = len(_sf)
+            _sum  = sum(x["dev_r"] for x in _sf)
+            _abs  = sum(abs(x["dev_r"]) for x in _sf)
+            _worst = min(_sf, key=lambda v: v["dev_r"])
+            lines.append(f"  n={_n}  net {_sum:+.3f}R  mean {_sum/_n:+.4f}R/stop  "
+                         f"gross dispersion {_abs:.3f}R")
+            lines.append(f"  worst fill: {_worst['coin']} {_worst['opened']} "
+                         f"{_worst['dev_r']:+.3f}R ({_worst['adv_pct']*100:+.3f}% past trigger)")
+
+            # The verdict, stated in the direction that stops a future session
+            # re-proposing a fix for a cost that is not there.
+            _adverse = [x for x in _sf if x["dev_r"] < 0]
+            lines.append(f"  {len(_adverse)}/{_n} filled adverse, {_n-len(_adverse)}/{_n} filled favourable")
+            if abs(_sum / _n) < 0.02:
+                lines.append("  VERDICT: the original stop is execution-UNBIASED. Net "
+                             f"{_sum:+.3f}R over {_n} stops is not a tax, it is noise "
+                             "cancelling;")
+                lines.append("  the resting exchange stop fills either side of its trigger "
+                             "about equally. Do NOT spend a session tightening entry")
+                lines.append("  brackets or stop placement to recover it -- there is nothing "
+                             "to recover.")
+            else:
+                lines.append(f"  VERDICT: net {_sum:+.3f}R over {_n} stops is a REAL "
+                             f"{'cost' if _sum < 0 else 'credit'}, not cancelling noise "
+                             "-- investigate before tuning anything else.")
+
+            # The comparison that gives the number its meaning.
+            try:
+                if _slip:
+                    _rmean = sum(x["slip_r"] for x in _slip) / len(_slip)
+                    lines.append(f"  vs RATCHET: {_rmean:+.3f}R lost per arm (n={len(_slip)}) "
+                                 f"against {_sum/_n:+.4f}R per original stop.")
+                    lines.append("  Execution loss in this book is a RATCHET phenomenon, not a "
+                                 "venue tax -- the ratchet arms at market and")
+                    lines.append("  rests its stop on the price that just traded; the original "
+                                 "stop rests far away and waits. Same venue,")
+                    _ratio = (f"{abs(_rmean / (_sum / _n)):.0f}x"
+                              if abs(_sum / _n) > 1e-9 else "unboundedly more")
+                    lines.append(f"  same order type, {_ratio} the leak per event. "
+                                 "That is placement, not liquidity.")
+            except NameError:
+                pass
+
+            _wmin = min(x["width_pct"] for x in _sf)
+            _wmax = max(x["width_pct"] for x in _sf)
+            lines.append(f"  1R width spans {_wmin*100:.2f}%-{_wmax*100:.2f}% of entry "
+                         f"({_wmax/_wmin:.1f}x) at a FIXED SL_ATR_MULT -- so an identical")
+            lines.append("  percentage of slippage buys wildly different amounts of R. Read the "
+                         "dev column against the width column,")
+            lines.append("  never on its own.")
+            lines.append("  NOTE: realised should EQUAL -1.00R -- an invariant, not a statistic. "
+                         "The trade cannot lose more than the")
+            lines.append("  distance to its own stop; only the fill can.")
+        if _sf_gap:
+            lines.append("  prices incomplete, excluded above: "
+                         + ", ".join(f"{c} {o} {r:+.2f}R" for c, o, r in _sf_gap))
+    except Exception as _e:
+        lines.append(f"\n── STOP FILL QUALITY ──\n  stop fill check failed: {_e}")
 
     # ── Excursion (MFE/MAE) ────────────────────────────────────────
     # The section above measures the exit. This one measures the entry, which

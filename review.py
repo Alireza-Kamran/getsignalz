@@ -487,8 +487,36 @@ def should_quiet(hour_utc):
 # shows regularly, that is enough to step straight over minute 0 and silently
 # skip the review for the whole day. A window costs nothing (the date latch still
 # bounds it to one run) and removes the race entirely.
+#
+# Moved off the top of the hour on 2026-09-06. The review is the only blocking
+# work left in the loop, and at 23:00 it blocked the 23:00 CANDLE: measured over
+# 38 nights the 23:00 scan starts a median 30s late but a p90 of 19.4 min and a
+# worst case of 27.7 min, with 16 nights over 5 min, against ~9s for every other
+# hour of the day. Last night it was 14.0 min (23:00:07 -> 23:14:06 in bot.log).
+#
+# Since 2026-09-02 position management sits ABOVE this block, so the ratchet and
+# the resting stops are no longer affected -- what is left is ENTRIES, and this
+# is a mean-reversion engine whose signal is a transient stretch from the mean.
+# Deciding the 23:00 candle on prices read at 23:14 is 14 minutes of signal-to-
+# fill drift on one candle in every 24, self-inflicted and free to remove.
+#
+# 23:20 rather than 23:30, because the windows must stay disjoint from
+# should_weekly_review's (see below, and test_review_order.py section 3): a pass
+# that matched both would start the weekly against a loop the nightly had
+# already blocked. The 23:00 scan finishes by ~23:02, so 23:20 clears it by 18
+# minutes, and on Sundays the nightly still returns in time for the weekly to
+# fire immediately after it in the normal order.
+#
+# This does NOT stress SCAN_STALE_ALERT_SEC=8100, which live.py sizes to clear
+# exactly this review. It relaxes it: the review no longer consumes a scan slot,
+# so the longest scan-free stretch falls from 22:01 -> (23:00 + review) to
+# 23:01 -> (23:30 + review). At the BRAIN_TIMEOUT-bounded worst case that is 99
+# min against 129 min today, i.e. more headroom under an unchanged threshold.
+# The threshold itself is deliberately left alone -- it was only stabilised on
+# 08-31 after a 3-of-4 false-alarm run, and re-deriving it on one night's data
+# is how that run started.
 def should_nightly_review(hour_utc, minute_utc):
-    return hour_utc == 23 and minute_utc < 10
+    return hour_utc == 23 and 20 <= minute_utc < 30
 
 
 def should_weekly_review(weekday, hour_utc, minute_utc):
@@ -497,6 +525,34 @@ def should_weekly_review(weekday, hour_utc, minute_utc):
 
 def should_version_push(hour_utc, minute_utc):
     return hour_utc == 4 and minute_utc == 0
+
+
+def _untracked_source(git):
+    """Root-level *.py that git does not yet track — the files `add -u` misses.
+
+    `git ls-files --others --exclude-standard` lists untracked files with
+    .gitignore applied, which is the whole safety property here: config.py holds
+    the API keys and is ignored on line 2 of .gitignore, so it can never appear
+    in this list. Anything that weakens or removes --exclude-standard commits
+    the secrets.
+
+    Root level only, and .py only. The bot's importable surface and its tests
+    all live in the repo root; everything nested is either __pycache__ or the
+    avatar/ design scratch (43 generated PNGs and HTML mockups), and a nightly
+    job should not decide on its own to start committing binaries.
+
+    Returns [] on any git failure -- a push that stages nothing new is the
+    status quo, while raising here would take down the commit that carries the
+    night's real work.
+    """
+    try:
+        res = git("ls-files", "--others", "--exclude-standard")
+        if res.returncode != 0:
+            return []
+        return sorted(f for f in res.stdout.split()
+                      if "/" not in f and f.endswith(".py"))
+    except Exception:
+        return []
 
 
 def version_push():
@@ -593,6 +649,30 @@ def version_push():
 
         _git("add", "-u")                       # stage all tracked modified files
         _git("add", "VERSION", "CHANGELOG.md")  # always include these two
+
+        # `add -u` stages only files git ALREADY TRACKS, so for as long as this
+        # push has existed, every NEW module a nightly session wrote has been
+        # silently left out of every commit. Found 2026-09-06 by checking what
+        # `git ls-files` actually returns: brand.py and io_safe.py were both
+        # missing from the repository while being imported by tg.py, tracker.py
+        # and review.py itself -- a fresh clone could not start the bot -- along
+        # with five test files, i.e. the safety net was absent from the backup of
+        # the thing it protects. Nothing surfaced it because the commit succeeds:
+        # the loss is invisible until someone clones.
+        #
+        # Deliberately NOT `git add -A`. That would also sweep in 43 untracked
+        # design assets under avatar/ (generated PNGs, HTML mockups) whose place
+        # in the repo is Kamran's call, not this function's, and a nightly job
+        # that quietly starts committing binaries is worse than one that misses
+        # a file. Root-level *.py only: that is exactly the set the running
+        # process imports and the tests it is checked by.
+        #
+        # --exclude-standard is what keeps this safe -- it honours .gitignore,
+        # where config.py (API keys) sits on the first line. Dropping that flag
+        # would commit the secrets. Pinned by test_git_add_new.py.
+        _new = _untracked_source(_git)
+        if _new:
+            _git("add", *_new)
 
         commit_title = f"v{new_ver} — nightly {date_str}"
         if param_changes or ai_changes:

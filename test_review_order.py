@@ -58,16 +58,31 @@ def pos(needle, label):
 
 
 # ── 1. Nightly latch is a window, not an instant ─────────────────────────────
-for minute in range(0, 10):
+for minute in range(20, 30):
     check(f"nightly fires at 23:{minute:02d}", should_nightly_review(23, minute))
-for minute in (10, 11, 30, 59):
+for minute in (0, 5, 19, 30, 59):
     check(f"nightly silent at 23:{minute:02d}", not should_nightly_review(23, minute))
 for hour in (0, 4, 22, 21):
-    check(f"nightly silent at {hour:02d}:00", not should_nightly_review(hour, 0))
+    check(f"nightly silent at {hour:02d}:20", not should_nightly_review(hour, 20))
 
-# The pre-fix behaviour must still be covered by the new window -- widening may
-# not move the start of the window, only its end.
-check("nightly still fires at exactly 23:00", should_nightly_review(23, 0))
+# The window is still ten minutes wide. POLL=20s plus a pass's network calls can
+# step over any single minute, which is the race the window exists to close; its
+# width is the guarantee, its position is not.
+width = sum(1 for m in range(60) if should_nightly_review(23, m))
+check(f"nightly window is 10 min wide (got {width})", width == 10)
+
+# REPLACES "nightly still fires at exactly 23:00" (2026-09-02..2026-09-06).
+# That assertion pinned the window's START on the rule "widening may not move
+# the start, only its end" -- correct for a widening, but this is a RELOCATION
+# and the start is exactly what had to move. The review is the last blocking
+# work in the loop and at 23:00 it blocked the 23:00 candle scan: p90 19.4 min
+# late over 38 nights, 14.0 min last night, against ~9s every other hour. Since
+# position management moved above it (2026-09-02) the ratchet is safe, so the
+# cost is entry drift on a mean-reversion signal that decays in minutes.
+# The invariant that actually matters is the one below: nightly must clear the
+# candle scan it used to block, and must not collide with the weekly.
+check("nightly starts after the candle scan can finish (>=23:10)",
+      not any(should_nightly_review(23, m) for m in range(0, 10)))
 
 # ── 2. Weekly latch is a window, not an instant ──────────────────────────────
 for minute in (30, 31, 45, 59):
