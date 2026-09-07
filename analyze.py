@@ -381,6 +381,84 @@ def _feed_quality_split(trades, stale):
     return clean, dirty, unmeasured
 
 
+# Where the signal log actually begins. journal["signals"] was not written
+# before this instant, so every trade opened earlier joins to nothing. This is
+# a SCHEMA date, not a market fact -- see _entry_bands.
+SIGNAL_LOG_FROM = "2026-08-10T17:01"
+
+
+def _entry_bands(trades, signals):
+    """Bucket closed trades by their ENTRY conditions, and RETURN the leftovers.
+
+    Returns (banded, dropped). `dropped` is every trade that could not be
+    banded, as (coin, opened, r, why) -- it is not the caller's option to
+    ignore it, it is the coverage statement that has to be printed next to the
+    result.
+
+    The inline version this replaces did `if not sig or r is None: continue`
+    with no counter, and silently computed the whole table on 14 of 20 closed
+    trades. The six it discarded are ARB 07-27, ETH 07-31, AVAX 08-01,
+    ETH 08-01, BTC 08-03 and INJ 08-06 -- and the reason none of them joined is
+    that journal["signals"] does not start until 2026-08-10T17:01. The
+    exclusion criterion was THE DATE SIGNAL LOGGING WAS SWITCHED ON, which has
+    no connection whatsoever to entry quality. The two cohorts differ:
+
+        kept     n=14  WR 36%  meanR +0.266
+        dropped  n= 6  WR 50%  meanR -0.050
+
+    so a reader comparing any cell against the report's headline (+0.171R, WR
+    40%) was comparing it to a baseline drawn from a different sample than the
+    table. Neither published figure describes the table's own population.
+
+    The one useful consequence, which was accidental and is now deliberate:
+    because the cut is by date and that date (08-10) falls AFTER the 08-05
+    exit-regime boundary, every banded trade is a current-regime trade. The
+    table is cleaner than its caption claimed -- but it was true by luck, and
+    luck is not a property you get to keep silently.
+    """
+    banded  = defaultdict(lambda: {"n": 0, "w": 0, "r": 0.0})
+    dropped = []
+    for t in trades:
+        sig = _sig_for(t, signals)
+        r   = _r_of(t)
+        if r is None:
+            dropped.append((t.get("coin"), str(t.get("open_time", ""))[:16],
+                            None, "no R (entry stop not recorded)"))
+            continue
+        if not sig:
+            opened = str(t.get("open_time", ""))[:16]
+            why = ("predates the signal log" if opened < SIGNAL_LOG_FROM
+                   else "no signal within 2h of entry")
+            dropped.append((t.get("coin"), opened, r, why))
+            continue
+        rsi_v, adx_v = sig.get("rsi"), sig.get("adx")
+        stretch_v = _stretch_of(sig)
+        for label in (
+            (f"RSI {_band([15,20,23], rsi_v, ['<15','15-20','20-23','23-25'])}"
+             if sig.get("direction", 1) == 1
+             else f"RSI {_band([77,80,85], rsi_v, ['75-77','77-80','80-85','85+'])}")
+            if rsi_v is not None else None,
+            f"ADX {_band([15,20], adx_v, ['<15','15-20','20-25'])}"
+            if adx_v is not None else None,
+            f"stretch {_band([2.0,3.0], stretch_v, ['1.5-2','2-3','3+'])}"
+            if stretch_v is not None else None,
+        ):
+            if label is None:
+                continue
+            banded[label]["n"] += 1
+            banded[label]["w"] += 1 if r > 0 else 0
+            banded[label]["r"] += r
+    return banded, dropped
+
+
+def _band(vals, val, labels):
+    """First label whose edge `val` falls under; last label otherwise."""
+    for edge, lab in zip(vals, labels):
+        if val < edge:
+            return lab
+    return labels[-1]
+
+
 def _loop_latency(logs=None, state=None):
     """How long after each hour the loop actually got round to that candle.
 
@@ -547,6 +625,54 @@ def _excursion_stats(state):
         except (KeyError, TypeError, ValueError, ZeroDivisionError):
             continue
     return out
+
+
+def _excursion_hazard(exc, levels=(0.5, 1.0, 1.5, 2.0, 2.5, 3.0)):
+    """Conditional continuation: given a trade got to L, did it get to the next L?
+
+    Every existing view of the excursion column is a set of MARGINAL survival
+    counts ("26% reached 2.0R"). Those describe how many trades ended up in the
+    tail; they do not describe WHERE the population thins out, and those are
+    different questions with different answers. Marginal counts falling smoothly
+    from 84% to 11% look like one continuous distribution. The conditional
+    counts show whether the attrition is spread evenly across the range or
+    concentrated in one band -- and if it is concentrated, that band is the
+    level at which this entry's trades stop being one population and become two.
+
+    Returns [{lo, hi, n_at_lo, n_at_hi, p, censored}, ...], plus the count of
+    rows with no recorded excursion, which the caller must print.
+
+    CENSORING -- the part that makes the top of this curve unreadable, and the
+    reason `censored` exists as a field rather than a footnote. The ratchet arms
+    at TRAIL_START_R and the trade is then closed AT that level, so no poll can
+    ever observe an MFE materially above it for a trade that armed. MFE is
+    therefore right-censored at TRAIL_START_R by our own exit rule: below it the
+    column is an observation of the market, at and above it the column is an
+    observation of the exit. "Only 11% reached 2.5R" is not a fact about the
+    entry -- it is 2.5R being the level at which we stop watching. Rows at or
+    above TRAIL_START_R are flagged so nobody reads a market claim off them.
+
+    Uses recorded MFE only. A trade whose excursion was never recorded is not a
+    trade whose excursion was zero -- see [[mfe-not-realised-r]].
+    """
+    meas = [x for x in exc if x.get("mfe_r") is not None]
+    unrecorded = len(exc) - len(meas)
+    try:
+        import strategy2
+        arm = float(strategy2.TRAIL_START_R)
+    except Exception:
+        arm = None
+    rows, prev_n, prev_lo = [], len(meas), 0.0
+    for L in levels:
+        n = sum(1 for x in meas if x["mfe_r"] >= L)
+        rows.append({
+            "lo": prev_lo, "hi": L,
+            "n_at_lo": prev_n, "n_at_hi": n,
+            "p": (n / prev_n) if prev_n else None,
+            "censored": arm is not None and L >= arm,
+        })
+        prev_n, prev_lo = n, L
+    return rows, unrecorded, arm
 
 
 def _ratchet_slippage(state):
@@ -1341,6 +1467,26 @@ def full_report():
             hit = sum(1 for m in mfes if m >= thr)
             lines.append(f"    reached >={thr:.1f}R favourable:  {hit:2}/{n}  "
                          f"({hit/n*100:4.0f}%)")
+        # The same column read conditionally instead of marginally. The counts
+        # above say how many trades ended in the tail; these say where the
+        # population thins, which is a different question.
+        haz, haz_unrec, haz_arm = _excursion_hazard(exc)
+        lines.append("  CONTINUATION (given it got to lo, did it reach hi?):")
+        for h in haz:
+            if h["n_at_lo"] == 0:
+                continue
+            mark = "  ← censored by our own exit" if h["censored"] else ""
+            lines.append(f"    {h['lo']:.1f}R -> {h['hi']:.1f}R   "
+                         f"{h['n_at_hi']:2}/{h['n_at_lo']:<2} = {h['p']*100:3.0f}%{mark}")
+        if haz_unrec:
+            lines.append(f"    (excludes {haz_unrec} trade(s) with no recorded "
+                         f"excursion — not counted as zero)")
+        if haz_arm is not None:
+            lines.append(f"    CENSORING: the ratchet arms at {haz_arm:.2f}R and closes the trade")
+            lines.append("    THERE, so no poll can observe an MFE above it on a trade that")
+            lines.append("    armed. Below that level this column measures the market; at and")
+            lines.append("    above it, it measures our exit. Do not read the last rows as a")
+            lines.append("    statement about how far price would have run.")
         if arm_r is not None:
             # Recorded fact first, sampled proxy only where no record exists.
             def _armed(x):
@@ -1432,40 +1578,40 @@ def full_report():
     # RSI went, how stretched from the mean, how close to the ADX ceiling.
     lines.append(f"\n── ENTRY CONDITION BANDS ──")
 
-    def _band(vals, val, labels):
-        for edge, lab in zip(vals, labels):
-            if val < edge:
-                return lab
-        return labels[-1]
-
-    banded = defaultdict(lambda: {"n":0,"w":0,"r":0.0})
-    for t in trades:
-        sig = _sig_for(t, signals)
-        r   = _r_of(t)
-        if not sig or r is None:
-            continue
-        rsi_v, adx_v = sig.get("rsi"), sig.get("adx")
-        stretch_v = _stretch_of(sig)
-        for label in (
-            (f"RSI {_band([15,20,23], rsi_v, ['<15','15-20','20-23','23-25'])}"
-             if sig.get("direction", 1) == 1
-             else f"RSI {_band([77,80,85], rsi_v, ['75-77','77-80','80-85','85+'])}")
-            if rsi_v is not None else None,
-            f"ADX {_band([15,20], adx_v, ['<15','15-20','20-25'])}"
-            if adx_v is not None else None,
-            f"stretch {_band([2.0,3.0], stretch_v, ['1.5-2','2-3','3+'])}"
-            if stretch_v is not None else None,
-        ):
-            if label is None:
-                continue
-            banded[label]["n"] += 1
-            banded[label]["w"] += 1 if r > 0 else 0
-            banded[label]["r"] += r
+    banded, band_dropped = _entry_bands(trades, signals)
     if banded:
+        # Coverage FIRST, by name, before any cell is read. This table was
+        # computed on 14 of 20 closed trades for weeks with no line saying so;
+        # the cut was the date signal logging began, and the discarded cohort
+        # had a different WR and a different meanR from the kept one.
+        kept = [t for t in trades
+                if _sig_for(t, signals) and _r_of(t) is not None]
+        kr = [_r_of(t) for t in kept]
+        lines.append(f"  COVERAGE: {len(kept)} of {len(trades)} closed trades banded "
+                     f"({len(kept)/len(trades)*100:.0f}%)"
+                     + (f"  — table baseline WR:{sum(1 for r in kr if r>0)/len(kr)*100:.0f}% "
+                        f"meanR:{sum(kr)/len(kr):+.3f}" if kr else ""))
+        if band_dropped:
+            dr = [d[2] for d in band_dropped if d[2] is not None]
+            lines.append(f"  NOT BANDED n={len(band_dropped)}"
+                         + (f"  WR:{sum(1 for r in dr if r>0)/len(dr)*100:.0f}% "
+                            f"meanR:{sum(dr)/len(dr):+.3f}" if dr else ""))
+            for coin, opened, r, why in band_dropped:
+                rs = f"{r:+.2f}R" if r is not None else "  n/a"
+                lines.append(f"      {coin:<5} {opened}  {rs}  — {why}")
+            lines.append("  ⚠️  do NOT compare a cell below against the report's headline EV/WR —")
+            lines.append("      the headline is drawn from all "
+                         f"{len(trades)} trades, this table from {len(kept)}.")
         for label, bs in sorted(banded.items()):
             lines.append(f"  {label:<16} n={bs['n']:2}  WR:{bs['w']/bs['n']*100:3.0f}%  "
                          f"meanR:{bs['r']/bs['n']:+.3f}")
         lines.append("  (n is far too small to act on; this is an accumulator)")
+        # Stated deliberately because it was previously true by accident: the
+        # drop is by date, and that date (08-10) falls after the 08-05 exit
+        # regime change, so this table is all current-regime trades.
+        lines.append(f"  (every banded trade opened on/after {SIGNAL_LOG_FROM[:10]}, which is")
+        lines.append(f"   after the {EXIT_REGIME_FROM} exit-regime change — so this table is")
+        lines.append("   single-regime. That is a consequence of the cut, not a filter.)")
         # These bands have implied "tighten the gate" for four sessions running
         # (low-ADX and high-stretch cells carry the winners). That reading was
         # TESTED on 2026-08-26 with portfolio2 -- the instrument that is valid
@@ -1711,8 +1857,20 @@ def _edge_confidence(journal, config):
     for t in trades:
         sig = _sig_for(t, signals)
         if s2_engine:
-            if sig and sig.get("fired"):
-                qualifying.append(t)
+            # Classify on the INVARIANT, not on the bookkeeping. Under S2 the
+            # only path that opens a position is strategy2.signal returning a
+            # setup, so the existence of a closed trade IS the evidence that a
+            # signal fired -- the journal row is a record of that fact, not the
+            # fact itself. The previous test (`sig and sig.get("fired")`)
+            # scored the six trades opened before journal["signals"] began on
+            # 2026-08-10 as non-qualifying, so the sample component read 14/20
+            # instead of 20/20 and understated Trust Score by 7.5 points on
+            # Kamran's dashboard. Same root cause as the ENTRY CONDITION BANDS
+            # drop; this is the second reader to mistake a schema date for a
+            # market fact. (This function was already fixed once, on 08-11, for
+            # the same class of error via a different route: it filtered on
+            # score>=7, an S1 concept, and pinned the score at 0 forever.)
+            qualifying.append(t)
         else:
             score = sig["score"] if sig else 0
             if score >= min_score:
