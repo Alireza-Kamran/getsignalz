@@ -1484,7 +1484,7 @@ def run():
                             logger.info(f"{_c:<6} no usable candles  [S2-only]")
                             continue
                         _pc = "real_close" if "real_close" in _df.columns else "close"
-                        _r = _rsi(_df["close"], strategy2.RSI_LEN).iloc[-1]
+                        _r = _rsi(_df["real_close"], strategy2.RSI_LEN).iloc[-1]
                         _a = _adx(_df["high"], _df["low"], _df["close"],
                                   strategy2.ADX_LEN)[0].iloc[-1]
                         if _r != _r or _a != _a:      # NaN: not enough history

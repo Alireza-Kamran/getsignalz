@@ -53,6 +53,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.50.0 — 2026-09-08
+
+**Stats:** 20 trades · WR: 40% · P&L: +83.4%
+
+**Code improvements (1):**
+- live.py: The observability scan logs real_close for the price display (via _pc) but computes RSI from the HA-transformed close. HA smoothing suppresses RSI extremes, producing moderate readings (38-56) where real-close RSI would show the oversold/overbought values (13-24, 75-86) that strategy2 actually gates on. analyze._scan_census() reads these log lines to estimate how often RSI_OVERSOLD/RSI_OVERBOUGHT thresholds are met — with HA-RSI those thresholds are almost never crossed, so the census dramatically underestimates signal frequency and the ADX conversion rate is reported as far higher than reality. real_close is guaranteed to exist (fetch_candles always sets df['real_close'] = df['close'] before the HA transform). ADX is left on HA bars intentionally — HA-ADX is a valid smoothing choice for trend-strength filtering and changing it would affect the gate census in a less certain direction.
+
+---
+
 ## v1.49.3 — 2026-09-07
 
 **Stats:** 20 trades · WR: 40% · P&L: +83.4%
