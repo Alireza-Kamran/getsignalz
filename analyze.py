@@ -847,6 +847,41 @@ def _stop_fill_quality(state):
 
 SELFLEARN_LOG = "/root/trade/selflearn.log"
 
+# Lines self_improve.sh prints itself. Our own banner is never the reason a
+# session died, and on the --retry paths it is the FIRST line of the body, so
+# any positional guess at the cause lands on it by construction.
+_OWN_BANNER = re.compile(r"^(MODE:|Session ended:|Session complete\.|=+$)")
+
+
+def _failure_reason(body, benign):
+    """Pick the line that explains a non-zero exit.
+
+    Was `body.splitlines()[0]` until 2026-09-09. That is a guess about WHERE
+    the harness prints a fatal error, and it held for 14 of 17 historical
+    failures by luck rather than by rule. It broke on 2026-09-08 in both
+    available ways at once: a benign permission warning appeared above the
+    error, and the two retries put our own `MODE:` banner on line 1. All three
+    of that night's failures were reported to the owner as a settings.json
+    typo when the real cause was `Your organization has disabled Claude
+    subscription access` -- a five-second fix pointed at instead of an
+    account-level one, for the three nights the bot traded unsupervised.
+
+    So classify on the invariant instead of the position: a line that also
+    opens a session which exited 0 CANNOT be why a different session exited
+    non-zero. `benign` carries those lines. Among what survives, take the
+    first -- the harness prints the cause before its remediation hints
+    (2026-08-20: "claude native binary not installed" above "Or reinstall
+    without --ignore-scripts").
+    """
+    lines = [l.strip() for l in body.strip().splitlines() if l.strip()]
+    for l in lines:
+        if l in benign or _OWN_BANNER.match(l):
+            continue
+        return l[:60]
+    # Nothing survived: no successful session to learn from, or a body that is
+    # all banner. Fall back to the old behaviour rather than claiming to know.
+    return (lines or ["unknown"])[0][:60]
+
 
 def _session_history(path=SELFLEARN_LOG, limit=14):
     """Mine selflearn.log for whether the NIGHTLY SESSION itself ran.
@@ -869,13 +904,32 @@ def _session_history(path=SELFLEARN_LOG, limit=14):
 
     chunks = re.split(
         r"={40}\nSELF-LEARN: (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}) UTC\n={40}\n", txt)
-    rows = []
+
+    parsed = []
     for i in range(1, len(chunks) - 2, 3):
         date, tm, body = chunks[i], chunks[i + 1], chunks[i + 2]
         m = re.search(r"Session ended: \S+ UTC \(exit (\d+)\)", body)
         if not m:
             continue                      # still running, or pre-07-24 format
-        rc = int(m.group(1))
+        parsed.append((date, tm, int(m.group(1)), body))
+
+    # Pass 1: what the harness prints ABOVE a session that then succeeded.
+    # Deliberately the FIRST line only, not every line of the body -- a
+    # successful body contains the whole session report, and that report
+    # routinely quotes the very error strings we are trying to attribute
+    # (this one does). Harvesting the full body would launder tonight's
+    # diagnosis into tomorrow's benign set and re-break this function.
+    benign = set()
+    for _d, _t, rc, body in parsed:
+        if rc != 0:
+            continue
+        for l in (x.strip() for x in body.strip().splitlines()):
+            if l and not _OWN_BANNER.match(l):
+                benign.add(l)
+                break
+
+    rows = []
+    for date, tm, rc, body in parsed:
         lim = re.search(r"You've hit your (session|weekly|monthly)[^\n]*", body)
         if rc == 0:
             reason = ""
@@ -884,7 +938,7 @@ def _session_history(path=SELFLEARN_LOG, limit=14):
         elif rc == 124:
             reason = "killed at the 60-minute wall clock"
         else:
-            reason = (body.strip().splitlines() or ["unknown"])[0][:60]
+            reason = _failure_reason(body, benign)
         rows.append((date, tm, rc, reason))
 
     ok = sum(1 for r in rows if r[2] == 0)
@@ -1051,7 +1105,30 @@ def full_report():
                 str(_t["opened_at"]).replace("Z", ""))).total_seconds() / 3600
             lines.append(f"  {_c} {_side} @ ${_ent:g}  stop ${_stop:g} "
                          f"({_risk:.2f}% = 1R)  open {_age:.1f}h")
-            lines.append(f"    MFE {_mfe:+.2f}R   MAE {_mae:+.2f}R")
+            # WHERE IT IS, not just where it has been. Every other line in this
+            # section is an excursion (MFE/MAE) or a consistency check between
+            # recorded fields; none of them says what the position is worth
+            # now. On 2026-09-07 the report showed ETH at "MFE +2.02R" and the
+            # session read that as a trade near its arming threshold. Two days
+            # later the same two lines were unchanged while the position had
+            # round-tripped to +0.26R -- the give-back is invisible in a column
+            # that only ever ratchets up. price_series is the tracker's own
+            # poll record, so this stays a pure function of state.json.
+            _ps  = [p for p in (_t.get("price_series") or []) if p]
+            _now = None
+            if _ps:
+                _now = (float(_ps[-1]) - _ent) * (_t.get("dir") or 1) \
+                       / abs(_ent - _stop)
+            lines.append(f"    MFE {_mfe:+.2f}R   MAE {_mae:+.2f}R"
+                         + (f"   NOW {_now:+.2f}R @ ${float(_ps[-1]):g}"
+                            if _now is not None else
+                            "   NOW n/a (no price_series yet)"))
+            if _now is not None and _mfe >= 0.5 and (_mfe - _now) >= 0.5:
+                lines.append(
+                    f"    ↩️  GIVEN BACK {_mfe - _now:.2f}R of a {_mfe:+.2f}R "
+                    f"peak ({100 * (_mfe - _now) / _mfe:.0f}%) — unrealised, "
+                    f"and nothing is locked until the ratchet arms at "
+                    f"{_arm_r:.2f}R")
             _locked = _t.get("locked_r")
             if _locked:
                 lines.append(f"    ratchet ARMED, locked +{float(_locked):.2f}R")
@@ -1703,6 +1780,25 @@ def full_report():
                             f"({n/len(cand)*100:>5.1f}%) "
                             f"{'pass' if hi <= _s2c.MAX_ADX else 'BLOCKED'}"
                         )
+            # The RSI column above changed DEFINITION mid-window. Until
+            # v1.50.0 (2026-09-08 23:28) live.py computed the scan RSI from the
+            # Heikin-Ashi close; HA smoothing suppresses extremes, so those
+            # rows understate how often RSI_OVERSOLD/RSI_OVERBOUGHT is touched.
+            # Everything above therefore pools two different measurements of
+            # the same name. Stated as a caption, not split into a statistic:
+            # the post-boundary sample is far too small to compare, and an
+            # underpowered split invites exactly the false read it would be
+            # drawn to prevent. When post grows past ~1000 obs, split it.
+            _post = [o for o in flat if o[0] >= "2026-09-08T23:28"]
+            if _post and len(_post) < len(flat):
+                lines.append(
+                    f"  ⚠️  RSI DEFINITION CHANGED mid-window (v1.50.0, "
+                    f"2026-09-08 23:28): {len(flat) - len(_post)} rows are "
+                    f"HA-close RSI, {len(_post)} are real-close RSI "
+                    f"({100 * len(_post) / len(flat):.1f}%). HA smoothing "
+                    f"suppresses extremes, so the older rows UNDERSTATE the "
+                    f"RSI-qualified counts above. Do not read the split until "
+                    f"the real-close side is large enough to stand alone.")
             lines.append("  NOTE: RSI extremes are CAUSED by strong directional")
             lines.append("  moves, which is exactly what raises ADX. The oversold")
             lines.append("  and ranging conditions are anti-correlated by")

@@ -53,6 +53,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.51.0 — 2026-09-09
+
+**Stats:** 20 trades · WR: 40% · P&L: +83.4%
+
+**Code improvements (1):**
+- trader.py: v1.50.0 (2026-09-08) switched the S2-only observability scan in live.py to real_close for RSI because HA smoothing suppresses extremes and understates how often RSI_OVERSOLD/RSI_OVERBOUGHT is touched. build_df was not updated alongside it, so the 12 S1-watchlist coins continued logging HA-RSI while the 8 S2-only coins logged real-close RSI. analyze._scan_census pools all bot.log scan observations and computes RSI qualification rates; with two different RSI definitions in the same pool the rates are internally inconsistent. real_close is also what strategy2.find_setup uses for its actual entry decisions. S1 is disabled so scoring is unaffected; the only change is a consistent RSI definition across the full 20-coin scan log and cleaner census statistics.
+
+---
+
 ## v1.50.0 — 2026-09-08
 
 **Stats:** 20 trades · WR: 40% · P&L: +83.4%

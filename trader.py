@@ -84,7 +84,7 @@ def build_df(coin, tf="1h", bars=600):
     if df is None or len(df) < 220:
         return None
 
-    df["rsi"] = rsi(df["close"])
+    df["rsi"] = rsi(df["real_close"])
     adx_v, plus_di, minus_di = adx(df["high"], df["low"], df["close"])
     df["adx"] = adx_v
 
