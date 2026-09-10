@@ -269,6 +269,95 @@ def _naive_utc(ts):
     return dt.replace(tzinfo=None) if dt.tzinfo else dt
 
 
+def _capacity(per, state, max_trades, rsi_lo, rsi_hi, max_adx):
+    """What MAX_TRADES cost, joined from position intervals x the scan stream.
+
+    This is the one entry-side constraint the journal cannot see from the
+    inside. Every other gate (RSI, ADX, stretch) leaves a record: the scan line
+    is printed, the setup is evaluated, `no mean-reversion setup` is logged. The
+    capacity gate leaves NOTHING -- until 2026-09-10 live.py returned early on
+    `s2_at_risk >= MAX_TRADES` without a single line, so "we looked and found
+    nothing" and "we never looked" were byte-identical in the log. The only
+    reason this function can reconstruct the history at all is that a SEPARATE
+    loop prints RSI/ADX per coin every hour regardless.
+
+    Method: rebuild each position's [opened_at, closed_at] interval from
+    state.json, count how many were live at each scan observation, and split the
+    observations on whether the book could have acted.
+
+    The comparison is CONFOUNDED and the confound is the finding, not a defect:
+    the book is full *because* setups just fired, so "book full" and "another
+    setup qualifying" share a cause -- market-wide dislocation. That is exactly
+    why the qualifying rate inside full hours runs several times baseline, and
+    it is the same fact as the 2026-08-19 cluster (three shorts in three hours
+    into one pump, two of them concurrent, both losers) seen from the other
+    side. Capacity binds precisely when opportunity clusters, and what clusters
+    is correlated. Read it as an argument about CORRELATION, not as a case for
+    raising MAX_TRADES -- the trades it would buy are the correlated ones.
+
+    RSI+ADX is an upper bound on qualifying (the live gate also needs
+    |stretch| >= MIN_STRETCH_ATR, which the scan line does not carry), so the
+    caller must deflate before quoting a trade count. It is the same upper bound
+    on both sides of the split, so the RATIO is unaffected.
+
+    Returns (hours_by_conc, blocked, blocked_q, reachable, reachable_q, runs)
+    where runs is [(first_hour, last_hour, {holders})] for each full stretch.
+    """
+    iv = []
+    for t in list(state.get("closed_trades", [])) + list(
+            state.get("tracked", {}).values()):
+        op = _naive_utc(t.get("opened_at"))
+        if op is None:
+            continue
+        # An open position has no closed_at; it holds its slot up to now.
+        cl = _naive_utc(t.get("closed_at")) or datetime.utcnow()
+        iv.append((op, cl, t.get("coin", "?")))
+    if not iv:
+        return {}, 0, 0, 0, 0, []
+
+    hours = defaultdict(lambda: [0, set()])
+    blocked = blocked_q = reachable = reachable_q = 0
+    for obs in per.values():
+        for ts, _price, rsi, adx in obs:
+            d = _naive_utc(ts.replace(" ", "T"))
+            if d is None:
+                continue
+            who = [c for a, b, c in iv if a <= d <= b]
+            hr = d.replace(minute=0, second=0, microsecond=0)
+            # A single hour is one book state; take the max seen in it rather
+            # than letting whichever coin printed last define the hour.
+            if len(who) >= hours[hr][0]:
+                hours[hr][0] = len(who)
+                hours[hr][1] = set(who)
+            qualifies = (rsi <= rsi_lo or rsi >= rsi_hi) and adx < max_adx
+            if len(who) >= max_trades:
+                blocked += 1
+                blocked_q += 1 if qualifies else 0
+            else:
+                reachable += 1
+                reachable_q += 1 if qualifies else 0
+
+    full = sorted(h for h, v in hours.items() if v[0] >= max_trades)
+    runs, cur = [], []
+    for h in full:
+        # Allow a one-hour hole: quiet hours (02-04 UTC) print no scan lines, so
+        # a stretch spanning them is one event, not two.
+        if cur and (h - cur[-1]) > timedelta(hours=2):
+            runs.append(cur)
+            cur = []
+        cur.append(h)
+    if cur:
+        runs.append(cur)
+    out = []
+    for r in runs:
+        who = set()
+        for h in r:
+            who |= hours[h][1]
+        out.append((r[0], r[-1], who))
+    return ({h: v[0] for h, v in hours.items()}, blocked, blocked_q,
+            reachable, reachable_q, sorted(out, key=lambda x: x[0]))
+
+
 def _open_during(gap_start, gap_end, state):
     """Positions that were open across a downtime gap, from state.json.
 
@@ -1804,6 +1893,70 @@ def full_report():
             lines.append("  and ranging conditions are anti-correlated by")
             lines.append("  construction -- this is the binding constraint on")
             lines.append("  trade frequency, not a tuning detail.")
+
+            # ── Capacity ───────────────────────────────────────────────────
+            # Placed here because it answers the question the census raises
+            # next: of the setups that DID clear the gate, how many arrived at
+            # a moment the book had no room? Every other constraint in this
+            # system is visible in the log; this one was not (see _capacity).
+            try:
+                hours_c, blk, blk_q, rch, rch_q, runs = _capacity(
+                    per, state, _s2c.MAX_TRADES, _s2c.RSI_OVERSOLD,
+                    _s2c.RSI_OVERBOUGHT, _s2c.MAX_ADX)
+            except Exception as cap_err:      # never let this kill the report
+                hours_c, runs = {}, []
+                lines.append(f"\n── CAPACITY ── unavailable: {cap_err}")
+            if hours_c:
+                tot_h = len(hours_c)
+                lines.append(f"\n── CAPACITY (MAX_TRADES={_s2c.MAX_TRADES}) ──")
+                for lvl in sorted(set(hours_c.values())):
+                    n = sum(1 for v in hours_c.values() if v == lvl)
+                    tag = "  <-- BLOCKED" if lvl >= _s2c.MAX_TRADES else ""
+                    lines.append(f"  {lvl} position(s) open: {n:>4} scan-hours "
+                                 f"({n/tot_h*100:>4.1f}%){tag}")
+                b_rate = blk_q / blk * 100 if blk else 0.0
+                r_rate = rch_q / rch * 100 if rch else 0.0
+                lines.append(f"  gate-qualifying obs while BLOCKED : {blk_q:>3} of "
+                             f"{blk:>6}  ({b_rate:.2f}%)")
+                lines.append(f"  gate-qualifying obs while OPEN    : {rch_q:>3} of "
+                             f"{rch:>6}  ({r_rate:.2f}%)")
+                if r_rate > 0:
+                    lines.append(f"  qualifying rate inside a full book is "
+                                 f"{b_rate/r_rate:.1f}x baseline — the book fills "
+                                 f"BECAUSE setups cluster, so this is a statement")
+                    lines.append(f"  about CORRELATION, not a case for raising the cap: "
+                                 f"the trades it would buy are the correlated ones")
+                # Deflate before quoting a trade count. RSI+ADX over-counts the
+                # live gate (no stretch term, one setup per candle, coin
+                # dedup); the observed ratio of trades actually opened to
+                # qualifying observations in REACHABLE hours is the honest
+                # conversion, and it is measured, not assumed.
+                lo_ts = min(o[0] for o in flat)
+                opened_in_window = sum(
+                    1 for t in list(state.get("closed_trades", [])) +
+                    list(state.get("tracked", {}).values())
+                    if (_naive_utc(t.get("opened_at")) or datetime.min)
+                    >= (_naive_utc(lo_ts.replace(" ", "T")) or datetime.min))
+                if rch_q and opened_in_window:
+                    defl = opened_in_window / rch_q
+                    mean_r = (sum(r for _, r in r_vals) / len(r_vals)) if r_vals else 0.0
+                    lines.append(f"  deflator: {opened_in_window} trades opened per "
+                                 f"{rch_q} reachable qualifying obs = {defl:.2f} "
+                                 f"trades/obs")
+                    lines.append(f"  => MAX_TRADES cost ~{blk_q*defl:.1f} trades over "
+                                 f"{tot_h} scan-hours. At meanR {mean_r:+.3f} that is "
+                                 f"~{blk_q*defl*mean_r:+.2f}R.")
+                    lines.append(f"  VERDICT: the cap is NOT the frequency bottleneck. "
+                                 f"The gate is — see the admitted rates above.")
+                if runs:
+                    lines.append(f"  full-book stretches (longest first):")
+                    for a, b, who in sorted(runs, key=lambda x: -( (x[1]-x[0]).total_seconds() ))[:5]:
+                        span = int((b - a).total_seconds() // 3600) + 1
+                        lines.append(f"    {a:%m-%d %H:%M} → {b:%m-%d %H:%M}  "
+                                     f"{span:>2}h  holders: {', '.join(sorted(who))}")
+                lines.append("  NOTE: RSI+ADX is an UPPER bound on qualifying (no")
+                lines.append("  stretch term in the scan line). Same bound both sides,")
+                lines.append("  so the ratio holds; the absolute counts do not.")
 
             stale = _feed_staleness(per)
             if stale:

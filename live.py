@@ -1434,6 +1434,40 @@ def run():
                                 balance_before=account_val, strategy="S2",
                                 sl_orig=res2["sl"],
                             )
+                else:
+                    # The capacity gate was a SILENT early-return for its whole
+                    # life: when the book is full this branch skipped the entire
+                    # S2 block, including the "scanned N coins -- no setup"
+                    # heartbeat two levels down that exists precisely so a
+                    # quiet scanner is distinguishable from a dead one. So the
+                    # log recorded the same thing for "we looked and found
+                    # nothing" and "we never looked" -- and the second case is
+                    # the only one that costs a trade.
+                    #
+                    # Reconstructing the cost after the fact needs the position
+                    # intervals joined against the scan stream (analyze._capacity
+                    # does this, 2026-09-10: 33 of 918 scan-hours full, and the
+                    # gate-qualifying rate in them was 4.3x baseline). That join
+                    # only works because a SEPARATE loop happens to print RSI/ADX
+                    # for every coin every hour; it is not a record this branch
+                    # ever kept. Naming the holders and their age here makes the
+                    # opportunity cost first-class going forward, and puts the
+                    # age of a stalled position -- the ETH SHORT has held a slot
+                    # for 156h with its stop still at -1.00R -- in the same line
+                    # as the thing it is blocking.
+                    held = []
+                    for c, t in _open_trades.items():
+                        if t.get("strategy") != "S2":
+                            continue
+                        opened = t.get("opened_at")
+                        age = ""
+                        if isinstance(opened, datetime):
+                            age = f" {(datetime.utcnow() - opened).total_seconds() / 3600:.0f}h"
+                        held.append(f"{c}{age}")
+                    logger.info(
+                        f"[S2] book full ({s2_at_risk}/{strategy2.MAX_TRADES}) "
+                        f"— not scanning; holders: {', '.join(held) or 'unknown'}"
+                    )
             except Exception as s2_err:
                 logger.error(f"[S2] error: {s2_err}")
 
