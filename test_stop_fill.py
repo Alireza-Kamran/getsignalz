@@ -138,7 +138,23 @@ check("the tighter stop loses far more R for it",
 
 # ── 6. Real book: the numbers the report prints ──────────────────────────────
 real, real_gap = _stop_fill_quality(load_state())
-check(f"real book measures 12 original stops (got {len(real)})", len(real) == 12)
+
+# Derived, not pinned. This read `len(real) == 12` until 2026-09-12, when ARB
+# (09-05) and DOGE (09-10) stopped out and a GREEN suite turned red because the
+# book moved on -- nothing had broken ([[reference_stale_instruments]]). A
+# literal count cannot tell "a row was silently dropped" from "we took two more
+# trades", and only the first is a defect.
+#
+# Re-derived here BY SIGN, independently of the function under test: the
+# original stop is always adverse, so rr < 0 is exactly the set that exited on
+# it. Deliberately not `locked_r is None and sl == sl_orig` -- that also matches
+# the four pre-2026-08-16 winners whose trail moved without writing a lock back,
+# and folding those in imports +5.3R of ratchet profit into a loss-side figure.
+_losses = sum(1 for t in load_state().get("closed_trades", [])
+              if (t.get("rr") or 0) < 0)
+check(f"real book measures every losing trade and no other "
+      f"({len(real)} measured vs {_losses} losses)", len(real) == _losses)
+check("the real book is not empty", len(real) > 0)
 check("no coverage gap in the real book", not real_gap)
 check("every measured trade is a loss", all(x["real_r"] < 0 for x in real))
 check("none of the four unlocked winners leaked in",

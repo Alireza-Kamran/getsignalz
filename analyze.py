@@ -393,12 +393,15 @@ _RESTART_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2}) \| INFO \| \s*GETSIGNAL AI")
 
 
-def _restarts(logs=None):
-    """Process starts per day, newest last. A restart is cheap (~5s) but not
-    free: it re-reads state.json, re-restores open trades, and re-prints the
-    current candle header. Nine of them in one afternoon (2026-09-04) is a
-    signal in its own right -- it just is not the signal the latency section
-    used to report it as."""
+def _restart_times(logs=None):
+    """Every process start, as sorted datetimes.
+
+    One source for both consumers -- the per-day restart count printed under
+    LOOP LATENCY, and the process-down test in _stall_cause. They were briefly
+    two independent parses of the same banner, which is how the report ends up
+    disagreeing with itself about whether the bot was running (see
+    [[reference_stale_instruments]]).
+    """
     if logs is None:
         logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
     seen = set()
@@ -408,12 +411,26 @@ def _restarts(logs=None):
                 for line in fh:
                     m = _RESTART_RE.match(line)
                     if m:
-                        seen.add((m.group(1), m.group(2), m.group(3), m.group(4)))
+                        seen.add(datetime(
+                            int(m.group(1)[:4]), int(m.group(1)[5:7]),
+                            int(m.group(1)[8:10]), int(m.group(2)),
+                            int(m.group(3)), int(m.group(4))))
         except OSError:
             continue
+    return sorted(seen)
+
+
+def _restarts(logs=None, starts=None):
+    """Process starts per day, newest last. A restart is cheap (~5s) but not
+    free: it re-reads state.json, re-restores open trades, and re-prints the
+    current candle header. Nine of them in one afternoon (2026-09-04) is a
+    signal in its own right -- it just is not the signal the latency section
+    used to report it as."""
+    if starts is None:
+        starts = _restart_times(logs)
     per = defaultdict(int)
-    for d, *_ in seen:
-        per[d] += 1
+    for t in starts:
+        per[f"{t:%Y-%m-%d}"] += 1
     return dict(per)
 
 
@@ -423,19 +440,35 @@ _VENUE_DOWN_RE = re.compile(
     r"(?:HL API \d+|Cycle error)")
 
 
-def _stall_cause(due, wall, venue_events):
-    """Why the loop was late: the venue was down, or we blocked ourselves.
+def _stall_cause(due, wall, venue_events, starts=()):
+    """Why the loop was late. Three causes, three different owners.
 
-    These are opposite risks and the report used to print both as "ratchet
-    frozen". When Hyperliquid 502s (2026-09-02 07:00, AAVE SHORT, 27.9 min) the
-    ratchet cannot advance -- but the STOP IS ALREADY RESTING ON THE EXCHANGE,
-    so the position is protected and only the upside is stalled, and there is
-    no code change on our side that prevents it. When we block ourselves
-    (2026-08-22..24, the inline nightly review) the venue is healthy, the loop
-    is simply not looking, and that IS ours to fix.
+    "process down" -- a startup banner lands INSIDE the window, so there was no
+    loop to block. The bot was not running and the first thing it did on waking
+    was print this candle. 2026-08-22 17:00 (banner 17:50:45, the tail of the
+    19h48m host blackout) and 2026-09-10 12:00 (banner 12:51:56, after a 1.9h
+    outage the heartbeat itself reported). Owned by AVAILABILITY and the
+    heartbeat, which already count it; counting it here too is double billing.
 
-    Conflating them invites a future session to "fix" an outage it does not own.
+    "venue down" -- Hyperliquid 502s (2026-09-02 07:00, AAVE SHORT, 27.9 min).
+    The ratchet cannot advance, but the STOP IS ALREADY RESTING ON THE
+    EXCHANGE, so the position is protected and only the upside is stalled.
+    Nothing on our side prevents it.
+
+    "self-blocked" -- the venue was healthy, the process was up, and our own
+    code held the loop (2026-08-22..24, the inline nightly review). That, and
+    only that, is ours to fix.
+
+    Checked in that order deliberately: a process that was not running cannot
+    have been blocked by its own code, whatever else the log says during the
+    gap. Until 2026-09-12 there were only two branches and "self-blocked" was
+    the RESIDUAL -- anything without a 502 in the window was billed to us. That
+    is a cause read off the absence of one alternative rather than off evidence
+    ([[reference_cause_by_elimination]]), and it inflated "OURS to prevent"
+    to 241 min against a true 84.
     """
+    if any(due < t <= wall for t in starts):
+        return ("process down", 0)
     hits = sum(1 for t in venue_events if due <= t <= wall)
     return ("venue down", hits) if hits else ("self-blocked", 0)
 
@@ -572,10 +605,17 @@ def _loop_latency(logs=None, state=None):
         logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
     rows = set()
     venue = []
+    starts = []
     for path in logs:
         try:
             with open(path, errors="ignore") as fh:
                 for line in fh:
+                    s = _RESTART_RE.match(line)
+                    if s:
+                        starts.append(datetime(
+                            int(s.group(1)[:4]), int(s.group(1)[5:7]),
+                            int(s.group(1)[8:10]), int(s.group(2)),
+                            int(s.group(3)), int(s.group(4))))
                     v = _VENUE_DOWN_RE.match(line)
                     if v:
                         venue.append(datetime(
@@ -597,6 +637,7 @@ def _loop_latency(logs=None, state=None):
             continue
     if not rows:
         return {}, [], []
+    starts = sorted(set(starts))
 
     # Keep only the FIRST time the loop reached each candle hour.
     #
@@ -639,7 +680,7 @@ def _loop_latency(logs=None, state=None):
         for wall, due, lag in sorted(rows):
             if lag <= _LAG_BLOCKED_SEC:
                 continue
-            cause, nerr = _stall_cause(due, wall, venue)
+            cause, nerr = _stall_cause(due, wall, venue, starts)
             for coin, side, still_open in _open_during(due, wall, state):
                 frozen.append((due, coin, side, lag, cause, nerr))
     return by_hour, worst, frozen
@@ -1147,19 +1188,38 @@ def full_report():
                 lines.append("  ⚠️  candle >5min late WITH A POSITION OPEN "
                              "(before 2026-09-02: ratchet frozen; after: "
                              "entries delayed, ratchet already ran):")
-                _tot = _ours = 0.0
+                # Totals are per STALL EVENT, not per row. _frozen carries one
+                # row per position open during the stall, because which
+                # positions were exposed is the point of the list -- but two
+                # positions open across one 52.9 min window cannot freeze
+                # 105.8 min of a 52.9 min hour. Summing the rows did exactly
+                # that on 2026-09-10 (DOGE + ETH), inflating the wall-clock
+                # total by the length of the worst event in the book.
+                _by_ev = {}
                 for _due, _coin, _side, _lag, _cause, _nerr in _frozen:
-                    _tot += _lag
-                    if _cause == "self-blocked":
-                        _ours += _lag
-                    _tag = (f"venue down ({_nerr} API errors) — stop was still "
-                            f"resting on the exchange" if _cause == "venue down"
-                            else "SELF-BLOCKED — venue was healthy, we were not "
-                                 "looking")
+                    _by_ev[_due] = (_lag, _cause)
+                _tot = sum(l for l, _ in _by_ev.values())
+                _bucket = defaultdict(float)
+                for _l, _c in _by_ev.values():
+                    _bucket[_c] += _l
+                _seen_ev = set()
+                for _due, _coin, _side, _lag, _cause, _nerr in _frozen:
+                    _tag = {
+                        "venue down": f"venue down ({_nerr} API errors) — stop "
+                                      f"was still resting on the exchange",
+                        "process down": "PROCESS DOWN — the bot was not running; "
+                                        "counted by AVAILABILITY, not ours here",
+                    }.get(_cause, "SELF-BLOCKED — venue was healthy, we were "
+                                  "not looking")
+                    _dup = "  ↳ same stall" if _due in _seen_ev else ""
+                    _seen_ev.add(_due)
                     lines.append(f"    {_due:%Y-%m-%d %H:%M}  {_coin} {_side}"
-                                 f"  frozen {_lag/60:.1f} min  [{_tag}]")
-                lines.append(f"    total {_tot/60:.0f} min frozen, of which "
-                             f"{_ours/60:.0f} min was OURS to prevent")
+                                 f"  frozen {_lag/60:.1f} min  [{_tag}]{_dup}")
+                lines.append(
+                    f"    {len(_by_ev)} stall event(s), {_tot/60:.0f} min "
+                    f"wall-clock: {_bucket['self-blocked']/60:.0f} min OURS to "
+                    f"prevent, {_bucket['venue down']/60:.0f} min venue, "
+                    f"{_bucket['process down']/60:.0f} min downtime")
             lines.append("  (blocking maintenance was moved BELOW position "
                          "management 2026-09-02; entries on the delayed candle "
                          "are still affected — see test_review_order.py)")

@@ -121,7 +121,20 @@ if bad:
 print("\n── signal messages: the three states a subscriber actually sees ──")
 import json as _json, types
 state = _json.load(open("/root/trade/state.json"))
-_t = dict(state["tracked"]["ETH"])
+# A rendering test must not depend on WHICH coin happens to be open. This read
+# state["tracked"]["ETH"] until 2026-09-12, when the ETH SHORT closed (09-03)
+# and the lookup raised KeyError -- which did not merely fail a check, it
+# ABORTED THE SUITE, so every assertion below this line silently stopped
+# running ([[reference_null_not_zero]]: one bad row must never kill a section).
+# Take whatever is open, and fall back to a fixture when the book is flat, which
+# it is ~50% of scan-hours.
+_tracked = state.get("tracked") or {}
+if _tracked:
+    _t = dict(next(iter(_tracked.values())))
+else:                                    # flat book -- synthesise the shape
+    _t = {"coin": "ETH", "dir": -1, "entry": 2509.6, "sl": 2584.9,
+          "size": 0.27, "leverage": 20, "signal_num": 99, "tp": 2133.2,
+          "opened_at": "2026-09-03T22:01:46+00:00"}
 _t.setdefault("strategy", "S2")
 _t.setdefault("sl_orig", _t["sl"])
 
@@ -199,9 +212,24 @@ print("\n── the bar must MEASURE something, not just exist ──")
 def _bar_line(msg):
     return next((l for l in msg.split("\n") if "░" in l or ("█" in l and "%" in l)), "")
 
-_near = dict(_t); _near["price_series"] = [2509.6]
-_a = tracker._live_text(_near, 2500.0, hl_leverage=20, hl_entry=2509.6)   # ~0.2R
-_b = tracker._live_text(_near, 2420.0, hl_leverage=20, hl_entry=2509.6)   # ~1.8R
+# Probe prices are DERIVED from the fixture's own geometry, not hardcoded. They
+# used to be ETH's 2500.0 / 2420.0 against an entry of 2509.6, which only worked
+# while the ETH SHORT happened to be the open position; fed a DOGE LONG at
+# $0.0839 the same literals are ~30000R away, both clamp to a full bar, and the
+# check fails for a reason that has nothing to do with the bar.
+_ent = float(_t["entry"])
+_dist = abs(_ent - float(_t["sl_orig"]))
+_sgn = 1 if float(_t.get("dir", 1)) > 0 else -1
+
+
+def _at_r(r):
+    """Price that puts this position r favourable R from entry."""
+    return _ent + _sgn * r * _dist
+
+
+_near = dict(_t); _near["price_series"] = [_ent]
+_a = tracker._live_text(_near, _at_r(0.2), hl_leverage=20, hl_entry=_ent)
+_b = tracker._live_text(_near, _at_r(1.8), hl_leverage=20, hl_entry=_ent)
 check("a bar is present", bool(_bar_line(_a)))
 check("the bar differs between an early and a late trade",
       _bar_line(_a) != _bar_line(_b))
