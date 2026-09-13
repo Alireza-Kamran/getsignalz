@@ -53,6 +53,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.52.0 — 2026-09-13
+
+**Stats:** 23 trades · WR: 35% · P&L: -12.8%
+
+**Code improvements (1):**
+- tracker.py: Align the closed-trade card's USD display with the archived pnl_usd: both now draw from size_orig (the size as filled at entry, immune to restart overwrites after a partial fill) rather than t['size'], which is set to the residue on the first restart after a partial stop. The _num helper handles None/str inputs safely and is already defined in this file; the fallback to t['size'] preserves behaviour for records opened before size_orig was introduced.
+
+---
+
 ## v1.51.3 — 2026-09-12
 
 **Stats:** 22 trades · WR: 36% · P&L: +11.0%

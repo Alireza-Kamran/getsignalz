@@ -277,7 +277,7 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
         else:
             fa, en, emo = "استاپ خورد", "Stop Hit", "❌"
 
-        usd = (current_price - entry) * direction * abs(t.get("size", 0) or 0)
+        usd = (current_price - entry) * direction * _num(t.get("size_orig") or t.get("size"))
         rows = [("Entry", brand.fmt_px(entry)),
                 ("Exit",  brand.fmt_px(current_price)),
                 ("Result", _r_of(current_price)),

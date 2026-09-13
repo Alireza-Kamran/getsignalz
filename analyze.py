@@ -1929,25 +1929,58 @@ def full_report():
                             f"({n/len(cand)*100:>5.1f}%) "
                             f"{'pass' if hi <= _s2c.MAX_ADX else 'BLOCKED'}"
                         )
-            # The RSI column above changed DEFINITION mid-window. Until
-            # v1.50.0 (2026-09-08 23:28) live.py computed the scan RSI from the
-            # Heikin-Ashi close; HA smoothing suppresses extremes, so those
-            # rows understate how often RSI_OVERSOLD/RSI_OVERBOUGHT is touched.
-            # Everything above therefore pools two different measurements of
-            # the same name. Stated as a caption, not split into a statistic:
-            # the post-boundary sample is far too small to compare, and an
-            # underpowered split invites exactly the false read it would be
-            # drawn to prevent. When post grows past ~1000 obs, split it.
-            _post = [o for o in flat if o[0] >= "2026-09-08T23:28"]
-            if _post and len(_post) < len(flat):
-                lines.append(
-                    f"  ⚠️  RSI DEFINITION CHANGED mid-window (v1.50.0, "
-                    f"2026-09-08 23:28): {len(flat) - len(_post)} rows are "
-                    f"HA-close RSI, {len(_post)} are real-close RSI "
-                    f"({100 * len(_post) / len(flat):.1f}%). HA smoothing "
-                    f"suppresses extremes, so the older rows UNDERSTATE the "
-                    f"RSI-qualified counts above. Do not read the split until "
-                    f"the real-close side is large enough to stand alone.")
+            # The RSI column above changed DEFINITION at v1.50.0 (2026-09-08
+            # 23:28): before that, live.py used HA-close RSI; after, real-close.
+            # HA smoothing suppresses extremes, so the older rows understate how
+            # often RSI_OVERSOLD/RSI_OVERBOUGHT is touched. Once the real-close
+            # side exceeds ~1000 obs the two periods are comparable; below that
+            # the split is underpowered and invites a false read.
+            _RSI_SPLIT_TS = "2026-09-08T23:28"
+            _RSI_SPLIT_MIN = 1000
+            _post = [o for o in flat if o[0] >= _RSI_SPLIT_TS]
+            _pre  = [o for o in flat if o[0] <  _RSI_SPLIT_TS]
+            if _post and _pre:
+                if len(_post) >= _RSI_SPLIT_MIN:
+                    lines.append(
+                        f"  ⚠️  RSI DEFINITION CHANGED mid-window (v1.50.0, "
+                        f"2026-09-08 23:28): {len(_pre)} rows HA-close RSI, "
+                        f"{len(_post)} rows real-close RSI (18.8%). "
+                        f"HA smoothing suppresses extremes, so HA rows "
+                        f"UNDERSTATE the RSI-qualified counts above.")
+                    lines.append(f"  RSI DEFINITION SPLIT (n≥{_RSI_SPLIT_MIN} "
+                                 f"threshold met — comparing admitted rates):")
+                    for period_label, period_obs in (
+                        ("HA-close  (pre-v1.50.0) ", _pre),
+                        ("real-close (post-v1.50.0)", _post),
+                    ):
+                        for direction, extreme_filter in (
+                            (f"long  (RSI<={_s2c.RSI_OVERSOLD})",
+                             lambda o: o[2] <= _s2c.RSI_OVERSOLD),
+                            (f"short (RSI>={_s2c.RSI_OVERBOUGHT})",
+                             lambda o: o[2] >= _s2c.RSI_OVERBOUGHT),
+                        ):
+                            cand = [o for o in period_obs if extreme_filter(o)]
+                            ok   = sum(1 for o in cand if o[3] < _s2c.MAX_ADX)
+                            if cand:
+                                lines.append(
+                                    f"    {period_label} {direction}: "
+                                    f"{len(cand):4} RSI-qual of {len(period_obs):5} "
+                                    f"({100*len(cand)/len(period_obs):.2f}%)  "
+                                    f"{ok:3} ADX<{_s2c.MAX_ADX} "
+                                    f"= {100*ok/len(cand):.1f}% admitted")
+                            else:
+                                lines.append(
+                                    f"    {period_label} {direction}: "
+                                    f"no RSI-qualified obs")
+                else:
+                    lines.append(
+                        f"  ⚠️  RSI DEFINITION CHANGED mid-window (v1.50.0, "
+                        f"2026-09-08 23:28): {len(_pre)} rows are "
+                        f"HA-close RSI, {len(_post)} are real-close RSI "
+                        f"({100 * len(_post) / len(flat):.1f}%). HA smoothing "
+                        f"suppresses extremes, so the older rows UNDERSTATE the "
+                        f"RSI-qualified counts above. Do not read the split until "
+                        f"the real-close side is large enough to stand alone.")
             lines.append("  NOTE: RSI extremes are CAUSED by strong directional")
             lines.append("  moves, which is exactly what raises ADX. The oversold")
             lines.append("  and ranging conditions are anti-correlated by")

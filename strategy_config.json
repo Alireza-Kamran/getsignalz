@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-09-12",
+  "last_updated": "2026-09-13",
   "updated_by": "auto-nightly",
   "min_score": 7,
   "max_trades": 1,
@@ -34,7 +34,7 @@
     "timeframe_1h": 1,
     "timeframe_15m": 0
   },
-  "notes": "S1 disabled (engine=strategy2.py). 2026-09-12 session: NO STRATEGY PARAMETER CHANGES; every S2 constant is owner-locked and n=22 / EV +0.063R / t=+0.19 justifies moving none. Fixed analyze._stall_cause: 'self-blocked' was a RESIDUAL bucket (anything without a venue 502 was billed to us), so two process OUTAGES -- 2026-08-22 17:00 (host blackout tail) and 2026-09-10 12:00 (1.9h outage) -- were reported as our own blocking code. Added a process-down branch keyed on the startup banner landing inside the stall window, and moved the totals from per-position rows to distinct stall events (two positions open across one 52.9min window were billing 105.8min of wall-clock). 268min/241min-ours -> 216min/84min-ours. Also repaired two suites pinned to a moving book: test_stop_fill hardcoded '12 original stops' (now derived by rr<0 sign), test_brand indexed tracked['ETH'] and ABORTED the whole suite when that position closed (now takes whatever is open, with a fallback). 18/18 suites green.",
+  "notes": "S1 disabled (engine=strategy2.py). 2026-09-13 session: NO STRATEGY PARAMETER CHANGES; every S2 constant is owner-locked and n=22 / EV +0.063R / t=+0.19 justifies moving none. Implemented RSI definition split in analyze.py ENTRY GATE CENSUS (threshold 1000 real-close obs met: 1817 obs = 18.8% of total). Key finding: long (RSI<=25) real-close admitted rate 2.86% vs HA-close 1.80% -- CONFIRMS HA was suppressing oversold readings (+59%). Short side dominated by recent market regime (5-day ranging window, no overbought events). 18/18 suites green.",
   "suspended_coins": {},
   "engine": "S1_DISABLED \u2014 live engine is strategy2.py (mean reversion). Every parameter in this file (min_score, min_adx, trail_pct, tp_ratio, session_*, watchlist, signal_weights) belongs to the RETIRED liquidity-pool engine and has NO effect while S1_ENABLED=False in live.py. S2's parameters live in strategy2.py."
 }
