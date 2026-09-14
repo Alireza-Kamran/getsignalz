@@ -230,6 +230,8 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
     # happy path does not write -- that is the whole lesson of test_null_record.
     sig_num   = t.get("signal_num")
     opened_at = datetime.fromisoformat(t["opened_at"])
+    if opened_at.tzinfo is not None:
+        opened_at = opened_at.replace(tzinfo=None)
     # `or 0.0`, not a .get default: the reconstructed OP record carries these
     # keys PRESENT but NULL, so a default never fires and the None flows into a
     # comparison. Exactly the shape that took down four readers on 2026-09-03.
@@ -251,6 +253,8 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
     if closed and t.get("closed_at"):
         try:
             ref = datetime.fromisoformat(str(t["closed_at"]).replace("Z", ""))
+            if ref.tzinfo is not None:
+                ref = ref.replace(tzinfo=None)
         except Exception:
             pass
     dur_str = brand.dur((ref - opened_at).total_seconds())
@@ -1026,7 +1030,10 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
         _closed_dt = datetime.utcnow()
         _dur_h = 0.0
         try:
-            _dur_h = (_closed_dt - datetime.fromisoformat(str(t.get("opened_at", "")).replace("Z", ""))).total_seconds() / 3600
+            _opened = datetime.fromisoformat(str(t.get("opened_at", "")).replace("Z", ""))
+            if _opened.tzinfo is not None:
+                _opened = _opened.replace(tzinfo=None)
+            _dur_h = (_closed_dt - _opened).total_seconds() / 3600
         except Exception:
             pass
         state.setdefault("closed_trades", []).append({
@@ -1050,6 +1057,8 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
         try:
             import result_card
             opened_at = datetime.fromisoformat(t["opened_at"])
+            if opened_at.tzinfo is not None:
+                opened_at = opened_at.replace(tzinfo=None)
             # utcnow() is right only while this runs at close time; anything that
             # regenerates the card later would stamp the wrong close time and an
             # inflated duration, exactly as the text message did.
