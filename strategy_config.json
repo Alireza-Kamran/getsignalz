@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-09-14",
+  "last_updated": "2026-09-15",
   "updated_by": "auto-nightly",
   "min_score": 7,
   "max_trades": 1,
@@ -34,7 +34,7 @@
     "timeframe_1h": 1,
     "timeframe_15m": 0
   },
-  "notes": "S1 disabled (engine=strategy2.py). 2026-09-14 session: NO STRATEGY PARAMETER CHANGES; every S2 constant is owner-locked and n=23 / EV +0.013R / t=+0.04 justifies moving none. DOGE LONG resolved: round-tripped from +1.97R MFE to -1.08R (gave back 3.06R), the third trade to approach 2.5R without arming. Bug fix: tracker.py timezone-aware vs naive datetime mismatch in _live_text duration calc -- OP and other records with +00:00 in opened_at/closed_at crashed the subtraction. 18/18 suites green.",
+  "notes": "S1 disabled (engine=strategy2.py). 2026-09-15 session: NO STRATEGY PARAMETER CHANGES; every S2 constant is owner-locked and n=24 / EV -0.030R / t=-0.10 justifies moving none. BTC closed its 5th trade (-1.03R): 5 trades, WR 20%, sumR -3.31R -- MEETS the removal bar, WATCHLIST is owner-locked so reported only. Two shorts open (OP, ETH) both past +1.0R MFE. Bug fix: live.py _acquire_lock exited against its OWN pid after review.py os.execv restart (09-13 23:29:35), leaving systemd to bring the bot back 32s later with exit 1. test_brand day-old check re-pinned to a synthetic age. 19/19 suites green.",
   "suspended_coins": {},
   "engine": "S1_DISABLED \u2014 live engine is strategy2.py (mean reversion). Every parameter in this file (min_score, min_adx, trail_pct, tp_ratio, session_*, watchlist, signal_weights) belongs to the RETIRED liquidity-pool engine and has NO effect while S1_ENABLED=False in live.py. S2's parameters live in strategy2.py."
 }

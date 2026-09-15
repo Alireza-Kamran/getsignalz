@@ -955,11 +955,24 @@ def _acquire_lock():
     if os.path.exists(LOCKFILE):
         try:
             old_pid = int(open(LOCKFILE).read().strip())
-            os.kill(old_pid, 0)          # check if process is alive
-            logger.error(f"Another instance already running (PID {old_pid}). Exiting.")
-            raise SystemExit(1)
+            if old_pid == os.getpid():
+                # review._self_improve() restarts the bot with os.execv, which
+                # keeps the PID and skips atexit, so the file still holds OUR
+                # pid and os.kill(pid, 0) is trivially true. Until 2026-09-15
+                # this branch exited against itself on every execv restart
+                # ("Another instance already running (PID <own pid>)", 09-13
+                # 23:29:35) and only systemd's Restart= brought the bot back,
+                # 32 s later, with exit status 1.
+                logger.info(f"Lockfile holds our own PID {old_pid} — "
+                            f"in-place restart, keeping it")
+            else:
+                os.kill(old_pid, 0)      # check if process is alive
+                logger.error(f"Another instance already running (PID {old_pid}). Exiting.")
+                raise SystemExit(1)
         except ProcessLookupError:
             pass                         # stale lockfile — process is dead
+        except ValueError:
+            pass                         # corrupt lockfile — overwrite it
     open(LOCKFILE, "w").write(str(os.getpid()))
 
 def _release_lock():

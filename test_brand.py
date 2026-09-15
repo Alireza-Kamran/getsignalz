@@ -238,7 +238,20 @@ check("an early trade does not render a full bar", "░" in _bar_line(_a))
 print("\n── prices are formatted, not %.5g ──")
 check("thousands separator on ETH", "2,509.60" in OPEN_UNARMED)
 check("small-price coin keeps its precision", "0.66933" in CLOSED_LOSS)
-check("a day-old trade reads as days", re.search(r"\dd \d+h", OPEN_UNARMED) is not None)
+# Render with a SYNTHETIC age: OPEN_UNARMED takes whatever position is live,
+# and that trade is under a day old about half the time (OP, 7 h old, failed
+# this on 2026-09-15). A check pinned to the live book fails when the book
+# moves, not when the formatter breaks ([[reference_stale_instruments]]).
+from datetime import datetime as _dt, timedelta as _td
+_aged = dict(_t)
+_aged["opened_at"] = (_dt.utcnow() - _td(hours=30)).isoformat()
+_OLD = tracker._live_text(_aged, 2444.0, hl_roe=0.35, hl_pnl_usd=6.57,
+                          hl_leverage=20, hl_entry=2509.6)
+check("a day-old trade reads as days", re.search(r"\dd \d+h", _OLD) is not None)
+check("a fresh trade does not read as days",
+      re.search(r"\dd \d+h", tracker._live_text(
+          dict(_t, opened_at=(_dt.utcnow() - _td(hours=7)).isoformat()), 2444.0,
+          hl_roe=0.35, hl_pnl_usd=6.57, hl_leverage=20, hl_entry=2509.6)) is None)
 
 print("\n── the instrument panel: bar / spark / track ──")
 # The old bar was min(int(abs(lev_pnl)/3), 10) on a LEVERAGED figure: at 20x a
