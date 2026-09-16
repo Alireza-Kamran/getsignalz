@@ -15,6 +15,14 @@ from io_safe import atomic_write_json, atomic_write_text
 
 REVIEW_STATE = "/root/trade/.review_msg_id"
 
+# Called every ~20s while the Claude brain subprocess runs inside
+# _self_improve(). live.py installs its position-management pass here at
+# startup (review.KEEPALIVE = _manage_book) so the ratchet keeps running for
+# the 5-36 minutes the review used to block it. None when review.py is driven
+# from anywhere other than the live loop, in which case the wait simply blocks
+# as before.
+KEEPALIVE = None
+
 
 def _get_review_msg_id():
     if os.path.exists(REVIEW_STATE):
@@ -231,7 +239,7 @@ def _self_improve():
         elif 5 <= drawdown <= 10 and cur_risk > 0.03:
             config["risk_pct"] = 0.03
             changes.append(f"RISK_PCT reset to 3%  (drawdown recovered to {drawdown:.1f}%)")
-        insights.append(f"Drawdown: {drawdown:.1f}%  |  RISK_PCT: {config.get('risk_pct', cur_risk)*100:.1f}%")
+        insights.append(f"Drawdown: {drawdown:.1f}%  |  S1 RISK_PCT: {config.get('risk_pct', cur_risk)*100:.1f}% (S1 disabled - S2 risk is in strategy2.S2_RISK_PCT, owner-locked)")
 
         # ── 5. MAX_TRADES (concurrent loss correlation) ──────────────────────────
         cur_max = config.get("max_trades", 2)
@@ -379,7 +387,7 @@ def _self_improve():
         code_edits = []
         try:
             from ai_brain import run_ai_brain, format_dm as brain_format_dm
-            brain_result = run_ai_brain()
+            brain_result = run_ai_brain(keepalive=KEEPALIVE)
             tg.dm_owner(brain_format_dm(brain_result))
             if brain_result["changes_applied"]:
                 code_edits = [{"file": c["file"], "reason": c["reason"]}

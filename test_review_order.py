@@ -76,9 +76,14 @@ check(f"nightly window is 10 min wide (got {width})", width == 10)
 # the start, only its end" -- correct for a widening, but this is a RELOCATION
 # and the start is exactly what had to move. The review is the last blocking
 # work in the loop and at 23:00 it blocked the 23:00 candle scan: p90 19.4 min
-# late over 38 nights, 14.0 min last night, against ~9s every other hour. Since
-# position management moved above it (2026-09-02) the ratchet is safe, so the
-# cost is entry drift on a mean-reversion signal that decays in minutes.
+# late over 38 nights, 14.0 min last night, against ~9s every other hour.
+# NOTE (2026-09-16): "since position management moved above it the ratchet is
+# safe" was written here and in live.py, and it was wrong -- the reorder runs
+# the ratchet once BEFORE the review and not again until it returns. The
+# review blocked the loop 125 min across 12 position-crossing nights between
+# 09-03 and 09-14 (analyze REVIEW BLOCKING). What makes the ratchet safe is
+# the brain-wait keepalive pinned by test_brain_keepalive.py; the ordering
+# below is still required, it is just not sufficient.
 # The invariant that actually matters is the one below: nightly must clear the
 # candle scan it used to block, and must not collide with the weekly.
 check("nightly starts after the candle scan can finish (>=23:10)",

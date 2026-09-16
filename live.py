@@ -15,6 +15,7 @@ from executor import (get_account_value, get_positions, get_mids, open_trade,
 from journal import log_signal, log_trade_open, log_trade_close
 from review  import (should_quiet, should_nightly_review, should_weekly_review,
                      nightly_review, weekly_review, version_push)
+import review as _review
 import tracker
 import tg
 import strategy2
@@ -434,6 +435,48 @@ def _check_trail(positions, account_val, mids=None):
             f"{'🔒' if locked == 0 else '📈'} {coin} SL → {label} "
             f"<code>${new_sl:.4f}</code>"
         )
+
+
+_keepalive_passes = 0
+
+
+def _manage_book():
+    """One position-management pass, in the loop's own order, callable from
+    INSIDE blocking maintenance.
+
+    review._self_improve() runs the Claude brain as a subprocess for 5-36
+    minutes. Until 2026-09-16 that wait was subprocess.run() on the main
+    thread, so for its whole duration _check_trail_s2 did not execute --
+    2026-09-14 23:20-23:34 it sat on two open shorts (OP, ETH) for 14 min.
+    The 2026-09-02 reordering put the ratchet ABOVE the review, which means it
+    runs once before the wait begins and then not again until the wait ends.
+    Ordering was not the hazard. Blocking was. ai_brain._run_claude now hands
+    control back here every KEEPALIVE_SLICE_S seconds.
+
+    Same four steps, same order as run()'s loop body (test_review_order.py
+    pins both against each other). Deliberately NO scan and NO entries: a new
+    position opened mid-review would be invisible to the review's own
+    state snapshot. Single-threaded by design -- this is called from the main
+    thread while it waits on the child, so nothing here races state.json.
+    Errors are logged in the loop's own words and swallowed: the brain wait
+    must outlive a failed poll.
+    """
+    global _keepalive_passes
+    _keepalive_passes += 1
+    try:
+        _beat(4800)          # keep the review-width watchdog allowance
+        positions   = get_positions()
+        account_val = get_account_value()
+        mids        = get_mids() if _open_trades else {}
+        _reconcile_dust(positions)
+        _check_closed(positions, account_val)
+        if _open_trades:
+            if S1_ENABLED:
+                _check_trail(positions, account_val, mids=mids)
+            _check_trail_s2(positions, mids=mids)
+            _verify_stops(positions)
+    except Exception as e:
+        logger.error(f"Cycle error (during review keepalive): {e}")
 
 
 def _check_trail_s2(positions, mids=None):
@@ -989,6 +1032,7 @@ def _release_lock():
 def run():
     import os, signal as _signal
     global _nightly_done, _weekly_done, _version_done, _quiet_logged
+    global _keepalive_passes
 
     _acquire_lock()
     # Clean up lockfile on exit
@@ -1014,6 +1058,11 @@ def run():
     import threading
     threading.Thread(target=_watchdog, daemon=True, name="watchdog").start()
     logger.info("Watchdog armed — self-restart if the main loop stalls")
+
+    # The brain wait inside nightly_review() calls this every ~20s so the
+    # ratchet is never frozen for the length of a review again. Installed
+    # before the loop, on the module, so review.py needs no import of live.py.
+    _review.KEEPALIVE = _manage_book
 
     logger.info("="*55)
     logger.info("  GETSIGNAL AI — ONLINE")
@@ -1276,8 +1325,13 @@ def run():
                 _save_review_latches(_nightly_done, _weekly_done)
                 _beat(4800)      # ai_brain runs to BRAIN_TIMEOUT=3600s
                 logger.info("Nightly review starting (blocks the loop)")
+                _keepalive_passes = 0
                 nightly_review()
-                logger.info("Nightly review complete")
+                # The count is what analyze._review_windows reads to tell a
+                # managed review from a frozen one. Zero passes on a night the
+                # brain ran means the hook was not installed -- worth seeing.
+                logger.info(f"Nightly review complete (book managed "
+                            f"{_keepalive_passes}x during the brain wait)")
                 # Shadow-mode strategy 2 reports separately: its numbers are
                 # deliberately kept out of the main review, which drives the
                 # public win rate and Trust Score.

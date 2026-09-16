@@ -214,29 +214,92 @@ def _validate(change: dict, code: str) -> str | None:
     return None
 
 
-def run_ai_brain() -> dict:
+# How often the brain wait hands control back to `keepalive`. Matches live.POLL
+# so a position gets exactly the management cadence it has the rest of the day.
+KEEPALIVE_SLICE_S = 20
+
+
+def _run_claude(cmd, prompt, keepalive=None, slice_s=KEEPALIVE_SLICE_S,
+                timeout=None):
+    """Run `cmd` with `prompt` on stdin; call `keepalive()` every `slice_s`
+    seconds while it runs.
+
+    subprocess.run() blocks the calling thread for the whole call. That thread
+    is live.py's main loop, and for the 5-36 minutes a brain run takes nothing
+    manages the book: on 2026-09-14 the review sat on TWO open shorts for 14
+    minutes, and on 2026-09-09 it ran 36 minutes. The 2026-09-02 fix moved the
+    review BELOW the ratchet in the loop, which guarantees the ratchet runs once
+    before the review starts -- and then stands still for its whole duration.
+    Ordering was never the problem; blocking was.
+
+    Popen + communicate(timeout=) in slices is the single-threaded answer: the
+    wait returns every `slice_s`, the caller manages the book, and the wait
+    resumes. No thread, so no race on state.json (the lost-update race that
+    erased OP on 2026-08-13 is exactly what a management thread would reopen).
+    communicate() documents that retrying after TimeoutExpired loses no output;
+    `input` may only be passed on the first call, hence `pending`.
+
+    Returns (returncode, stdout, stderr, keepalive_passes). Raises
+    subprocess.TimeoutExpired if `timeout` elapses; the child is killed first.
+    """
+    import time as _time
+    if timeout is None:
+        timeout = BRAIN_TIMEOUT
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, env={**os.environ},
+    )
+    t0 = _time.monotonic()
+    pending = prompt
+    passes = 0
+    while True:
+        remaining = timeout - (_time.monotonic() - t0)
+        if remaining <= 0:
+            proc.kill()
+            proc.communicate()
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        try:
+            out, err = proc.communicate(input=pending,
+                                        timeout=min(slice_s, remaining))
+            return proc.returncode, out, err, passes
+        except subprocess.TimeoutExpired:
+            pending = None
+            if keepalive is None:
+                continue
+            passes += 1
+            try:
+                keepalive()
+            except Exception:
+                # Management errors are logged by the callback's own owner
+                # (live.py); the brain wait must never die because a poll
+                # failed, or the review would be worse than the blocking it
+                # replaces.
+                pass
+
+
+def run_ai_brain(keepalive=None) -> dict:
     result = {
         "changes_applied":  [],
         "changes_rejected": [],
         "summary":          "",
         "analysis":         "",
         "error":            None,
+        "keepalive_passes": 0,
     }
 
     try:
         prompt = _build_prompt()
 
-        proc = subprocess.run(
-            ["claude", "--print", "--model", MODEL],
-            input=prompt, capture_output=True, text=True, timeout=BRAIN_TIMEOUT,
-            env={**os.environ}
-        )
+        out = ""
+        rc, out, err, passes = _run_claude(
+            ["claude", "--print", "--model", MODEL], prompt, keepalive=keepalive)
+        result["keepalive_passes"] = passes
 
-        if proc.returncode != 0:
-            result["error"] = f"claude CLI error (rc={proc.returncode}): {proc.stderr[:300]}"
+        if rc != 0:
+            result["error"] = f"claude CLI error (rc={rc}): {err[:300]}"
             return result
 
-        raw = proc.stdout.strip()
+        raw = out.strip()
 
         # Strip accidental markdown fences
         if raw.startswith("```"):
@@ -248,7 +311,7 @@ def run_ai_brain() -> dict:
         parsed = json.loads(raw)
 
     except json.JSONDecodeError as e:
-        result["error"] = f"Claude returned invalid JSON: {e} — raw: {proc.stdout[:300]}"
+        result["error"] = f"Claude returned invalid JSON: {e} — raw: {out[:300]}"
         return result
     except subprocess.TimeoutExpired:
         result["error"] = f"Claude brain timed out (>{BRAIN_TIMEOUT // 60} min)"

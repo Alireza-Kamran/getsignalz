@@ -53,6 +53,16 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.53.0 — 2026-09-16
+
+**Stats:** 27 trades · WR: 37% · P&L: +161.3%
+
+**Code improvements (2):**
+- analyze.py: A ghost close is a WARNING line the bot writes when it correctly recovers a trade that closed during an outage — it is the recovery path working as designed, not a fault. Counting each one as a bad log line deducts 2 trust-score points from the reliability pillar every time the availability-handling code does its job correctly. Removed from the check; Traceback lines still penalise as before.
+- review.py: The RISK_PCT shown here is from strategy_config.json and drives the retired S1 engine only. When the drawdown alert fires (currently 18.6% > 15%) the owner reads '1.0%' and may infer the active S2 risk has already been reduced — it has not. S2 sizes from strategy2.S2_RISK_PCT, which is a separate constant never touched by this function. Labelling it 'S1 RISK_PCT' and appending a short note prevents that misread on exactly the nights it matters most.
+
+---
+
 ## v1.52.2 — 2026-09-15
 
 **Stats:** 27 trades · WR: 37% · P&L: +161.3%

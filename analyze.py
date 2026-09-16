@@ -686,6 +686,74 @@ def _loop_latency(logs=None, state=None):
     return by_hour, worst, frozen
 
 
+_REVIEW_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2}) \| INFO \| "
+    r"(Nightly|Weekly) review (starting|complete)"
+    r"(?: \(book managed (\d+)x during the brain wait\))?")
+
+
+def _review_windows(logs=None):
+    """Every nightly/weekly review as (start, end, kind, how_ended, passes).
+
+    LOOP LATENCY measures a candle header against its own hour, which is the
+    right instrument for a review that starts at 23:00 -- and the WRONG one
+    for a review that starts at 23:20 and finishes before 00:00, which is
+    where it has run since 2026-09-06. A 14-minute review on 2026-09-14 sat on
+    two open shorts and produced no late candle at all, so the section above
+    reported 0 minutes for it. The instrument had drifted off the thing it
+    was built to see ([[reference_stale_instruments]]).
+
+    A review that ends in os.execv (review._self_improve restarts the bot on a
+    flat book) never logs "complete"; its end is the next startup banner. A
+    review followed by another review-start with no complete (2026-09-13:
+    nightly -> weekly) ended when the next one began. Windows with no visible
+    end at all are dropped, not guessed.
+
+    `passes` is the keepalive count the loop prints from 2026-09-16; None on
+    rows that predate it. Zero on a later row means the hook was not
+    installed, which is the regression this column exists to show.
+    """
+    if logs is None:
+        logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
+    events = []          # (ts, kind, what, passes)
+    for path in logs:
+        try:
+            with open(path, errors="ignore") as fh:
+                for line in fh:
+                    m = _REVIEW_RE.match(line)
+                    if m:
+                        ts = datetime(int(m.group(1)[:4]), int(m.group(1)[5:7]),
+                                      int(m.group(1)[8:10]), int(m.group(2)),
+                                      int(m.group(3)), int(m.group(4)))
+                        passes = int(m.group(7)) if m.group(7) is not None else None
+                        events.append((ts, m.group(5).lower(), m.group(6), passes))
+                        continue
+                    s = _RESTART_RE.match(line)
+                    if s:
+                        events.append((datetime(
+                            int(s.group(1)[:4]), int(s.group(1)[5:7]),
+                            int(s.group(1)[8:10]), int(s.group(2)),
+                            int(s.group(3)), int(s.group(4))), "process", "start", None))
+        except OSError:
+            continue
+    events = sorted(set(events))
+    out = []
+    for i, (ts, kind, what, _p) in enumerate(events):
+        if what != "starting":
+            continue
+        for ts2, kind2, what2, passes2 in events[i + 1:]:
+            if kind2 == kind and what2 == "complete":
+                out.append((ts, ts2, kind, "complete", passes2))
+                break
+            if kind2 == "process":
+                out.append((ts, ts2, kind, "restart", None))
+                break
+            if what2 == "starting":
+                out.append((ts, ts2, kind, "next review", None))
+                break
+    return out
+
+
 # Last commit that touched an exit constant in strategy2.py (TP_R 3.0 -> 5.0,
 # TRAIL_START_R -> 2.50). Trades opened before this ran a materially different
 # exit and must not be pooled with the ones after it -- see _excursion_stats.
@@ -1179,15 +1247,18 @@ def full_report():
             except Exception:
                 pass
             if _frozen:
-                # NOT "ratchet frozen" since 2026-09-02: _reconcile_dust /
-                # _check_closed / _check_trail_s2 / _verify_stops all run ABOVE
-                # the maintenance block and above this scan, so a late candle
-                # header no longer means the ratchet stood still. What it still
-                # costs is ENTRY latency on that candle (live.py:1240-1248).
-                # Rows dated before 2026-09-02 did freeze the ratchet.
+                # The 2026-09-02 reorder put _reconcile_dust / _check_closed /
+                # _check_trail_s2 / _verify_stops ABOVE the maintenance block,
+                # so the ratchet runs ONCE at the top of the pass that starts
+                # the review -- and then not again until the review returns.
+                # This caption used to read "after 09-02: ratchet already ran",
+                # which is true of one iteration and false of the stall. A
+                # blocked loop is a frozen ratchet whatever the source order;
+                # the fix that actually ends the freeze is the keepalive of
+                # 2026-09-16 (see REVIEW BLOCKING below).
                 lines.append("  ⚠️  candle >5min late WITH A POSITION OPEN "
-                             "(before 2026-09-02: ratchet frozen; after: "
-                             "entries delayed, ratchet already ran):")
+                             "(ratchet ran once at the top of the pass, then "
+                             "stood still for the whole stall):")
                 # Totals are per STALL EVENT, not per row. _frozen carries one
                 # row per position open during the stall, because which
                 # positions were exposed is the point of the list -- but two
@@ -1221,10 +1292,66 @@ def full_report():
                     f"prevent, {_bucket['venue down']/60:.0f} min venue, "
                     f"{_bucket['process down']/60:.0f} min downtime")
             lines.append("  (blocking maintenance was moved BELOW position "
-                         "management 2026-09-02; entries on the delayed candle "
-                         "are still affected — see test_review_order.py)")
+                         "management 2026-09-02 and to 23:20 on 09-06, so a "
+                         "review no longer shows up here as a late candle at "
+                         "all — see REVIEW BLOCKING)")
     except Exception as _e:
         lines.append(f"\n── LOOP LATENCY ──\n  latency check failed: {_e}")
+
+    # ── Review blocking ────────────────────────────────────────────
+    # The review is the one piece of blocking work the loop runs on purpose,
+    # and since it moved to 23:20 it finishes before the next candle, so the
+    # candle-latency instrument above cannot see it. This one reads the
+    # review's own start/end lines and asks the only question that matters:
+    # was a position open while the loop was not looking.
+    try:
+        _wins = _review_windows()
+        _st = load_state()
+        lines.append(f"\n── REVIEW BLOCKING (loop stopped inside nightly/weekly review) ──")
+        if not _wins:
+            lines.append("  no review windows found in the retained logs")
+        else:
+            _durs = sorted((e - s).total_seconds() for s, e, _k, _h, _p in _wins)
+            _n_night = sum(1 for w in _wins if w[2] == "nightly")
+            lines.append(f"  windows: {len(_wins)} ({_n_night} nightly)  "
+                         f"median {_durs[len(_durs)//2]/60:.1f} min  "
+                         f"p90 {_durs[int(len(_durs)*0.9)]/60:.1f} min  "
+                         f"max {_durs[-1]/60:.1f} min")
+            _exposed = []
+            for s, e, k, how, passes in _wins:
+                _pos = _open_during(s, e, _st)
+                if _pos:
+                    _exposed.append((s, e, k, how, passes, _pos))
+            if not _exposed:
+                lines.append("  no review crossed an open position ✓")
+            else:
+                _unman = sum((e - s).total_seconds() for s, e, _k, _h, p, _ in _exposed
+                             if not p)
+                lines.append(f"  ⚠️  {len(_exposed)} review(s) crossed an open position "
+                             f"— {_unman/60:.0f} min with the ratchet FROZEN:")
+                for s, e, k, how, passes, pos in _exposed:
+                    _coins = ", ".join(f"{c} {d}" for c, d, _ in pos)
+                    if passes:
+                        _tag = f"managed — book polled {passes}x during the brain wait"
+                    elif passes == 0:
+                        _tag = "‼️  0 keepalive passes — hook NOT installed, ratchet frozen"
+                    else:
+                        _tag = "ratchet frozen (predates the 2026-09-16 keepalive)"
+                    lines.append(f"    {s:%Y-%m-%d %H:%M} → {e:%H:%M}  "
+                                 f"{(e-s).total_seconds()/60:5.1f} min  {k:<7} "
+                                 f"ended by {how:<11} {_coins}  [{_tag}]")
+            _later = [w for w in _wins if w[0] >= datetime(2026, 9, 16)]
+            _nohook = [w for w in _later if w[2] == "nightly" and w[3] == "complete"
+                       and w[4] == 0]
+            if _nohook:
+                lines.append(f"  ‼️  {len(_nohook)} nightly review(s) since 2026-09-16 "
+                             f"completed with ZERO keepalive passes — the brain wait "
+                             f"is blocking again")
+            lines.append("  (since 2026-09-16 ai_brain._run_claude hands control to "
+                         "live._manage_book every 20s; the rest of the review still "
+                         "blocks, typically well under a minute)")
+    except Exception as _e:
+        lines.append(f"\n── REVIEW BLOCKING ──\n  check failed: {_e}")
 
     # ── Open book ──────────────────────────────────────────────────
     # Every other section reads closed_trades, so an open position is invisible
@@ -2260,7 +2387,7 @@ def _system_reliability():
     try:
         with open(BOTLOG_F) as f:
             recent = f.readlines()[-3000:]
-        bad_lines = sum(1 for l in recent if "Traceback" in l or "Ghost close" in l)
+        bad_lines = sum(1 for l in recent if "Traceback" in l)
         log_pts = max(0.0, 10 - bad_lines * 2)
     except FileNotFoundError:
         pass
