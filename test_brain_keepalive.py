@@ -142,6 +142,81 @@ check("_manage_book keeps the review-width heartbeat", "_beat(4800)" in mb)
 check("_manage_book swallows errors (brain wait must outlive a bad poll)",
       "except Exception" in mb)
 
+# ── 5. the count must be logged BEFORE anything that can end the process ─────
+# 2026-09-16 23:20->23:28 was the first review after the keepalive shipped. It
+# ended in os.execv (flat book, changes), live.py's "review complete" line was
+# never reached, and the report had no count to read -- the fix could not be
+# verified by the instrument built to verify it. review.py now logs the count
+# the moment the brain returns; analyze reads it for any window ending.
+rev_code = _code(REV)
+i_call = rev_code.find("run_ai_brain(keepalive=KEEPALIVE)")
+i_log = rev_code.find("Brain wait done in")
+i_execv = rev_code.find("os.execv(")
+check("review.py logs the brain-wait count", i_log != -1)
+check("count logged after the brain returns", i_call != -1 and i_log > i_call)
+check("count logged before os.execv", i_execv != -1 and i_log < i_execv)
+# Needles are the two f-string fragments as written (the line is split across
+# two literals), not the rendered text -- the rendered text is what (b)-(e)
+# feed the parser below.
+check("count line carries the wall time (0 passes on a 5s failure is not a missing hook)",
+      "Brain wait done in {_time.monotonic() - _t0:.0f}s" in rev_code
+      and "(book managed {brain_result['keepalive_passes']}x" in rev_code)
+
+import os
+import tempfile
+import analyze
+
+BANNER = "{d} {t} | INFO |   GETSIGNAL AI — ONLINE\n"
+START = "{d} {t} | INFO | {k} review starting (blocks the loop)\n"
+BRAIN = "{d} {t} | INFO | Brain wait done in {s}s (book managed {p}x during the brain wait)\n"
+DONE = "{d} {t} | INFO | {k} review complete{extra}\n"
+
+
+def _windows(text):
+    fd, path = tempfile.mkstemp(suffix=".log")
+    os.close(fd)
+    try:
+        with open(path, "w") as fh:
+            fh.write(text)
+        return analyze._review_windows(logs=[path])
+    finally:
+        os.unlink(path)
+
+
+# (b) execv night: starting -> brain line -> banner. No "complete" ever prints.
+w = _windows(START.format(d="2026-09-16", t="23:20:13", k="Nightly")
+             + BRAIN.format(d="2026-09-16", t="23:28:20", s=487, p=24)
+             + BANNER.format(d="2026-09-16", t="23:28:31"))
+check("execv night parsed as one window", len(w) == 1)
+check("execv night ends by restart", w and w[0][3] == "restart")
+check("execv night passes read from the brain line", w and w[0][4] == 24)
+check("execv night brain_secs read from the brain line", w and w[0][5] == 487)
+
+# (c) the pre-09-17 shape: count only on the loop's completion line.
+w = _windows(START.format(d="2026-09-15", t="23:20:16", k="Nightly")
+             + DONE.format(d="2026-09-15", t="23:38:55", k="Nightly",
+                           extra=" (book managed 3x during the brain wait)"))
+check("completion-line count still read", w and w[0][3] == "complete" and w[0][4] == 3)
+check("no brain line -> brain_secs None", w and w[0][5] is None)
+
+# (d) the brain failing fast: 0 passes on a 4-second wait is not a missing hook.
+w = _windows(START.format(d="2026-09-18", t="23:20:00", k="Nightly")
+             + BRAIN.format(d="2026-09-18", t="23:20:05", s=4, p=0)
+             + DONE.format(d="2026-09-18", t="23:20:40", k="Nightly",
+                           extra=" (book managed 0x during the brain wait)"))
+check("fast brain failure keeps passes=0 and secs=4", w and w[0][4] == 0 and w[0][5] == 4)
+
+# (e) nightly then weekly: the nightly's brain line must not leak into the weekly.
+w = _windows(START.format(d="2026-09-20", t="23:20:00", k="Nightly")
+             + BRAIN.format(d="2026-09-20", t="23:29:00", s=540, p=27)
+             + BANNER.format(d="2026-09-20", t="23:29:10")
+             + START.format(d="2026-09-20", t="23:30:19", k="Weekly")
+             + DONE.format(d="2026-09-20", t="23:30:41", k="Weekly", extra=""))
+check("nightly+weekly -> two windows", len(w) == 2)
+check("nightly keeps its brain count", w and w[0][2] == "nightly" and w[0][4] == 27)
+check("weekly does not inherit the nightly's brain line",
+      len(w) == 2 and w[1][2] == "weekly" and w[1][4] is None and w[1][5] is None)
+
 print(f"test_brain_keepalive: {PASSED}/{PASSED + len(FAILED)} passed")
 for f in FAILED:
     print("  FAIL:", f)

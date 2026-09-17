@@ -691,9 +691,19 @@ _REVIEW_RE = re.compile(
     r"(Nightly|Weekly) review (starting|complete)"
     r"(?: \(book managed (\d+)x during the brain wait\))?")
 
+# review._self_improve logs this the moment the brain returns (from
+# 2026-09-17), BEFORE the os.execv that ends a flat-book night with changes.
+# live.py's "review complete" line carries the same count but is never reached
+# on those nights: 2026-09-16 23:20->23:28 was the first review after the
+# keepalive shipped, it ended in execv, and the report had nothing to read.
+_BRAIN_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2}) \| INFO \| "
+    r"Brain wait done in (\d+)s \(book managed (\d+)x during the brain wait\)")
+
 
 def _review_windows(logs=None):
-    """Every nightly/weekly review as (start, end, kind, how_ended, passes).
+    """Every nightly/weekly review as
+    (start, end, kind, how_ended, passes, brain_secs).
 
     LOOP LATENCY measures a candle header against its own hour, which is the
     right instrument for a review that starts at 23:00 -- and the WRONG one
@@ -709,48 +719,68 @@ def _review_windows(logs=None):
     nightly -> weekly) ended when the next one began. Windows with no visible
     end at all are dropped, not guessed.
 
-    `passes` is the keepalive count the loop prints from 2026-09-16; None on
-    rows that predate it. Zero on a later row means the hook was not
-    installed, which is the regression this column exists to show.
+    `passes` is the keepalive count. It is read from the review's own "Brain
+    wait done" line when present (2026-09-17 on, written before any execv),
+    else from the loop's "review complete" line (2026-09-16 on, only reached
+    when the process survives the review). None on rows with neither. Zero
+    with a brain wait of a minute or more means the hook was not installed,
+    which is the regression this column exists to show; zero on a 5-second
+    wait is the brain failing fast, not the hook. `brain_secs` is None when
+    no brain line was seen.
     """
     if logs is None:
         logs = sorted(glob.glob("/root/trade/bot.2026-*.log")) + [BOTLOG_F]
-    events = []          # (ts, kind, what, passes)
+    events = []          # (ts, kind, what, passes, secs)
+
+    def _ts(m):
+        return datetime(int(m.group(1)[:4]), int(m.group(1)[5:7]),
+                        int(m.group(1)[8:10]), int(m.group(2)),
+                        int(m.group(3)), int(m.group(4)))
+
     for path in logs:
         try:
             with open(path, errors="ignore") as fh:
                 for line in fh:
                     m = _REVIEW_RE.match(line)
                     if m:
-                        ts = datetime(int(m.group(1)[:4]), int(m.group(1)[5:7]),
-                                      int(m.group(1)[8:10]), int(m.group(2)),
-                                      int(m.group(3)), int(m.group(4)))
                         passes = int(m.group(7)) if m.group(7) is not None else None
-                        events.append((ts, m.group(5).lower(), m.group(6), passes))
+                        events.append((_ts(m), m.group(5).lower(), m.group(6),
+                                       passes, None))
+                        continue
+                    b = _BRAIN_RE.match(line)
+                    if b:
+                        events.append((_ts(b), "brain", "done",
+                                       int(b.group(6)), int(b.group(5))))
                         continue
                     s = _RESTART_RE.match(line)
                     if s:
-                        events.append((datetime(
-                            int(s.group(1)[:4]), int(s.group(1)[5:7]),
-                            int(s.group(1)[8:10]), int(s.group(2)),
-                            int(s.group(3)), int(s.group(4))), "process", "start", None))
+                        events.append((_ts(s), "process", "start", None, None))
         except OSError:
             continue
     events = sorted(set(events))
     out = []
-    for i, (ts, kind, what, _p) in enumerate(events):
+    for i, (ts, kind, what, _p, _s) in enumerate(events):
         if what != "starting":
             continue
-        for ts2, kind2, what2, passes2 in events[i + 1:]:
+        brain = None          # (passes, secs) from the brain line, if seen
+        for ts2, kind2, what2, passes2, secs2 in events[i + 1:]:
+            if kind2 == "brain":
+                brain = (passes2, secs2)
+                continue
             if kind2 == kind and what2 == "complete":
-                out.append((ts, ts2, kind, "complete", passes2))
-                break
-            if kind2 == "process":
-                out.append((ts, ts2, kind, "restart", None))
-                break
-            if what2 == "starting":
-                out.append((ts, ts2, kind, "next review", None))
-                break
+                how = "complete"
+            elif kind2 == "process":
+                how = "restart"
+            elif what2 == "starting":
+                how = "next review"
+            else:
+                continue
+            if brain is not None:
+                out.append((ts, ts2, kind, how, brain[0], brain[1]))
+            else:
+                out.append((ts, ts2, kind, how,
+                            passes2 if how == "complete" else None, None))
+            break
     return out
 
 
@@ -1311,14 +1341,35 @@ def full_report():
         if not _wins:
             lines.append("  no review windows found in the retained logs")
         else:
-            _durs = sorted((e - s).total_seconds() for s, e, _k, _h, _p in _wins)
+            _durs = sorted((e - s).total_seconds() for s, e, _k, _h, _p, _b in _wins)
             _n_night = sum(1 for w in _wins if w[2] == "nightly")
             lines.append(f"  windows: {len(_wins)} ({_n_night} nightly)  "
                          f"median {_durs[len(_durs)//2]/60:.1f} min  "
                          f"p90 {_durs[int(len(_durs)*0.9)]/60:.1f} min  "
                          f"max {_durs[-1]/60:.1f} min")
+            # The latest nightly, whatever the book held: the keepalive count
+            # is the nightly proof the hook is installed, and a flat-book
+            # night is exactly when a missing hook must be caught -- by the
+            # time a position is open during the review it is too late.
+            _nights = [w for w in _wins if w[2] == "nightly"]
+            if _nights:
+                s, e, _k, how, passes, bsecs = _nights[-1]
+                if bsecs is not None:
+                    _kp = (f"brain wait {bsecs/60:.1f} min, book managed {passes}x"
+                           + ("  ‼️  ZERO passes on a real wait — hook NOT installed"
+                              if passes == 0 and bsecs >= 60 else ""))
+                elif passes is not None:
+                    _kp = f"book managed {passes}x (from the loop's completion line)"
+                else:
+                    _kp = ("no keepalive count in the log — review ended by "
+                           f"{how} before the loop could print one"
+                           + (" (predates the 2026-09-17 brain-wait line)"
+                              if s < datetime(2026, 9, 17) else
+                              "  ‼️  the brain line is missing: brain raised, or the log line is gone"))
+                lines.append(f"  latest nightly: {s:%Y-%m-%d %H:%M} → {e:%H:%M}  "
+                             f"{(e-s).total_seconds()/60:.1f} min  ended by {how}  [{_kp}]")
             _exposed = []
-            for s, e, k, how, passes in _wins:
+            for s, e, k, how, passes, _b in _wins:
                 _pos = _open_during(s, e, _st)
                 if _pos:
                     _exposed.append((s, e, k, how, passes, _pos))
@@ -1340,12 +1391,17 @@ def full_report():
                     lines.append(f"    {s:%Y-%m-%d %H:%M} → {e:%H:%M}  "
                                  f"{(e-s).total_seconds()/60:5.1f} min  {k:<7} "
                                  f"ended by {how:<11} {_coins}  [{_tag}]")
+            # Any ending counts: a flat-book night ends in execv, not
+            # "complete", and 2026-09-16 showed that reading only completed
+            # windows made the check unfireable on exactly those nights. A
+            # brain wait under a minute with 0 passes is the brain failing
+            # fast (usage limit, CLI error), not a missing hook.
             _later = [w for w in _wins if w[0] >= datetime(2026, 9, 16)]
-            _nohook = [w for w in _later if w[2] == "nightly" and w[3] == "complete"
-                       and w[4] == 0]
+            _nohook = [w for w in _later if w[2] == "nightly" and w[4] == 0
+                       and (w[5] is None or w[5] >= 60)]
             if _nohook:
                 lines.append(f"  ‼️  {len(_nohook)} nightly review(s) since 2026-09-16 "
-                             f"completed with ZERO keepalive passes — the brain wait "
+                             f"ran with ZERO keepalive passes — the brain wait "
                              f"is blocking again")
             lines.append("  (since 2026-09-16 ai_brain._run_claude hands control to "
                          "live._manage_book every 20s; the rest of the review still "

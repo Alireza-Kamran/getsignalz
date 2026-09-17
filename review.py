@@ -6,6 +6,7 @@ Everything else stays in logs or DM.
 """
 import json, os
 from datetime import datetime, timezone
+from loguru import logger
 from journal import get_today_summary, get_week_summary, compact
 from analyze import health_score
 import tg
@@ -387,7 +388,21 @@ def _self_improve():
         code_edits = []
         try:
             from ai_brain import run_ai_brain, format_dm as brain_format_dm
+            import time as _time
+            _t0 = _time.monotonic()
             brain_result = run_ai_brain(keepalive=KEEPALIVE)
+            # Logged HERE, not at live.py's "Nightly review complete": on a
+            # flat-book night with changes this function ends in os.execv
+            # below, and the completion line never prints. 2026-09-16
+            # 23:20->23:28 -- the first night after the keepalive shipped --
+            # left no count at all, so the fix could not be verified by the
+            # very report built to verify it. The count is the only evidence
+            # the ratchet ran during the wait; write it before anything that
+            # can end the process. Wall time is included so "0 passes" on a
+            # 5-second brain failure is not read as "hook not installed".
+            logger.info(f"Brain wait done in {_time.monotonic() - _t0:.0f}s "
+                        f"(book managed {brain_result['keepalive_passes']}x "
+                        f"during the brain wait)")
             tg.dm_owner(brain_format_dm(brain_result))
             if brain_result["changes_applied"]:
                 code_edits = [{"file": c["file"], "reason": c["reason"]}

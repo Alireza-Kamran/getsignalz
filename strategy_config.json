@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-09-16",
+  "last_updated": "2026-09-17",
   "updated_by": "auto-nightly",
   "min_score": 7,
   "max_trades": 1,
@@ -34,7 +34,7 @@
     "timeframe_1h": 1,
     "timeframe_15m": 0
   },
-  "notes": "S1 disabled (engine=strategy2.py). 2026-09-16 session: NO STRATEGY PARAMETER CHANGES; every S2 constant is owner-locked and n=27 / EV +0.134R / t=+0.44 justifies moving none. OP SHORT +2.44R and ETH SHORT +2.74R both ARMED (first shorts ever to arm); ETH LONG -0.84R after MFE +1.49R. Bug fix (trading path): the nightly review's Claude brain wait was subprocess.run() on the main thread, freezing the ratchet for the whole review -- 125 min across 12 position-crossing nights 09-03..09-14, invisible to LOOP LATENCY since the review moved to 23:20. ai_brain._run_claude now waits in 20s slices and calls live._manage_book (same 4 steps, same order, no entries) between them. New REVIEW BLOCKING report section + test_brain_keepalive.py. 20/20 suites green.",
+  "notes": "S1 disabled (engine=strategy2.py). 2026-09-17 session: NO STRATEGY PARAMETER CHANGES; no new trades (n=27, EV +0.134R, t=+0.44), book flat. Every S2 constant is owner-locked. Bug fix (observability of the 09-16 keepalive fix): the keepalive pass count was logged only on live.py's 'Nightly review complete' line, which is never reached when review._self_improve ends in os.execv (flat book + changes) -- exactly what happened 09-16 23:20->23:28, so the fix could not be verified. review.py now logs 'Brain wait done in Ns (book managed Nx during the brain wait)' the moment the brain returns, before the execv; analyze._review_windows reads it for any window ending and REVIEW BLOCKING always prints the latest nightly's count. test_brain_keepalive.py 40/40, 20/20 suites green. apply_config_to_trader() NOT run (no S1 value moved).",
   "suspended_coins": {},
   "engine": "S1_DISABLED \u2014 live engine is strategy2.py (mean reversion). Every parameter in this file (min_score, min_adx, trail_pct, tp_ratio, session_*, watchlist, signal_weights) belongs to the RETIRED liquidity-pool engine and has NO effect while S1_ENABLED=False in live.py. S2's parameters live in strategy2.py."
 }
