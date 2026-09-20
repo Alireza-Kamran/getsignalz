@@ -269,6 +269,89 @@ def _naive_utc(ts):
     return dt.replace(tzinfo=None) if dt.tzinfo else dt
 
 
+def _concurrency(trades):
+    """Do two open positions behave like two bets, or like one bet twice?
+
+    MAX_TRADES=2 caps the NUMBER of positions. It says nothing about their
+    correlation, and correlation is what actually sets the variance of the
+    book. This was flagged qualitatively on 2026-08-23 (three shorts inside
+    three hours on one market-wide pump, two of them concurrent and losing
+    together) and never measured. This measures it.
+
+    Method: every pair of closed trades whose [open, close] intervals overlap
+    is one observation, scored CONCORDANT when both won or both lost. The
+    yardstick is what independence would give at the book's own win rate --
+    p^2 + (1-p)^2 -- not 50%.
+
+    Two things this is NOT, and the caller prints both:
+
+      * The pairs are not independent of each other. One long-lived position
+        pairs with everything that opens inside it, so a single trade can carry
+        several pairs and a single outcome can drive most of the concordance.
+        `max_pairs_per_trade` is returned so the reader can see that.
+
+      * Concurrency is a PROXY for regime, not a cause. Positions overlap
+        BECAUSE setups cluster, and setups cluster when one move is dragging
+        many coins at once -- exactly the regime a mean-reversion entry is
+        worst in. The CAPACITY section already makes this argument from the
+        rejection stream (qualifying rate inside a full book is 0.7x baseline).
+        So a SOLO/CONCURRENT gap is not evidence that holding two positions
+        causes losses; it is evidence that the conditions which fill the book
+        are the conditions the edge dislikes.
+
+    Returns None when there is nothing to say.
+    """
+    rows = []
+    for t in trades:
+        r = _r_of(t)
+        o = _naive_utc(t.get("open_time"))
+        c = _naive_utc(t.get("close_time"))
+        if r is None or o is None or c is None or c < o:
+            continue
+        rows.append({"coin": t.get("coin", "?"),
+                     "dir":  "LONG" if t.get("direction") == 1 else "SHORT",
+                     "o": o, "c": c, "r": r})
+    if len(rows) < 2:
+        return None
+    rows.sort(key=lambda x: x["o"])
+
+    pairs, in_pair = [], defaultdict(int)
+    for i, a in enumerate(rows):
+        for b in rows[i + 1:]:
+            if b["o"] >= a["c"]:
+                continue          # rows are sorted by open, but not by close
+            ovl = (min(a["c"], b["c"]) - b["o"]).total_seconds() / 3600
+            if ovl <= 0:
+                continue
+            pairs.append((a, b, ovl, (a["r"] > 0) == (b["r"] > 0)))
+            in_pair[id(a)] += 1
+            in_pair[id(b)] += 1
+
+    wins = sum(1 for x in rows if x["r"] > 0)
+    p    = wins / len(rows)
+    solo = [x for x in rows if not in_pair[id(x)]]
+    conc = [x for x in rows if in_pair[id(x)]]
+
+    def _agg(g):
+        if not g:
+            return None
+        s = sum(x["r"] for x in g)
+        return {"n": len(g), "wr": sum(1 for x in g if x["r"] > 0) / len(g),
+                "sum": s, "mean": s / len(g)}
+
+    return {
+        "pairs":      pairs,
+        "n_pairs":    len(pairs),
+        "concordant": sum(1 for x in pairs if x[3]),
+        "opp_dir_concordant": sum(1 for a, b, _o, same in pairs
+                                  if same and a["dir"] != b["dir"]),
+        "independent": p * p + (1 - p) * (1 - p),
+        "max_pairs_per_trade": max(in_pair.values()) if in_pair else 0,
+        "solo": _agg(solo),
+        "conc": _agg(conc),
+    }
+
+
 def _capacity(per, state, max_trades, rsi_lo, rsi_hi, max_adx):
     """What MAX_TRADES cost, joined from position intervals x the scan stream.
 
@@ -1642,6 +1725,57 @@ def full_report():
         lines.append(f"  {k:<6} {ds['n']} trades  WR:{ds['w']/ds['n']*100:.0f}%  "
                      f"sumR:{ds['r']:+.2f}  meanR:{ds['r']/ds['n']:+.3f}")
     lines.append("  (structural baseline from backtest: ~72% long / ~28% short)")
+
+    # ── Concurrency ────────────────────────────────────────────────
+    # DIRECTION SPLIT asks what we bet on. This asks how many bets we were
+    # really making. MAX_TRADES caps position COUNT; nothing caps correlation,
+    # and correlation is what sets the book's variance. Flagged 2026-08-23,
+    # measured 2026-09-20. Report-only: MAX_TRADES is owner-locked.
+    try:
+        _cc = _concurrency(trades)
+    except Exception as _e:                       # never let a new section
+        _cc = None                                # abort the sections below it
+        lines.append(f"\n── CONCURRENCY ──\n  concurrency check failed: {_e}")
+    if _cc and _cc["n_pairs"]:
+        lines.append("\n── CONCURRENCY (is a second position a second bet?) ──")
+        lines.append(
+            f"  overlapping pairs: {_cc['n_pairs']}   "
+            f"concordant (both won or both lost): {_cc['concordant']}"
+            f" = {_cc['concordant'] / _cc['n_pairs'] * 100:.0f}%")
+        lines.append(f"  if the two were independent at this book's WR: "
+                     f"{_cc['independent'] * 100:.0f}%")
+        for _lbl, _g in (("SOLO", _cc["solo"]), ("CONCURRENT", _cc["conc"])):
+            if _g:
+                lines.append(f"  {_lbl:<11} n={_g['n']:2d}  WR:{_g['wr'] * 100:3.0f}%  "
+                             f"sumR:{_g['sum']:+.2f}  meanR:{_g['mean']:+.3f}")
+        for _a, _b, _ovl, _same in _cc["pairs"]:
+            lines.append(
+                f"    {_a['coin']:<5}{_a['dir']:<6}{_a['r']:+.2f}R || "
+                f"{_b['coin']:<5}{_b['dir']:<6}{_b['r']:+.2f}R  "
+                f"overlap {_ovl:5.1f}h  "
+                f"{'CONCORDANT' if _same else 'split     '} "
+                f"{'sameDir' if _a['dir'] == _b['dir'] else 'OPPdir'}")
+        if _cc["opp_dir_concordant"]:
+            lines.append(
+                f"  {_cc['opp_dir_concordant']} concordant pair(s) were OPPOSITE direction — "
+                f"a long and a short losing together is not directional beta,")
+            lines.append(
+                "  it is the regime being wrong for mean reversion in both directions at once.")
+        lines.append(
+            f"  CAUTION: pairs are NOT independent observations — one long-lived position pairs with")
+        lines.append(
+            f"  everything opened inside it, and here one trade carries up to "
+            f"{_cc['max_pairs_per_trade']} of the {_cc['n_pairs']} pairs.")
+        lines.append(
+            "  CAUTION: concurrency is a PROXY FOR REGIME, not a cause. The book fills because setups")
+        lines.append(
+            "  cluster, and setups cluster when one move drags many coins — see CAPACITY, where the")
+        lines.append(
+            "  qualifying rate inside a full book is 0.7x baseline. Do NOT read a SOLO/CONCURRENT gap")
+        lines.append(
+            "  as 'holding two positions loses money'; read it as 'the conditions that fill the book")
+        lines.append(
+            "  are the conditions this entry is worst in'. MAX_TRADES is owner-locked either way.")
 
     # ── Exit mechanism ─────────────────────────────────────────────
     # The single most important operating metric under the current regime, and

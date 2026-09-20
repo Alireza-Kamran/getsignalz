@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-09-19",
+  "last_updated": "2026-09-20",
   "updated_by": "auto-nightly",
   "min_score": 7,
   "max_trades": 1,
@@ -34,7 +34,7 @@
     "timeframe_1h": 1,
     "timeframe_15m": 0
   },
-  "notes": "S1 disabled (engine=strategy2.py). 2026-09-17 session: NO STRATEGY PARAMETER CHANGES; no new trades (n=27, EV +0.134R, t=+0.44), book flat. Every S2 constant is owner-locked. Bug fix (observability of the 09-16 keepalive fix): the keepalive pass count was logged only on live.py's 'Nightly review complete' line, which is never reached when review._self_improve ends in os.execv (flat book + changes) -- exactly what happened 09-16 23:20->23:28, so the fix could not be verified. review.py now logs 'Brain wait done in Ns (book managed Nx during the brain wait)' the moment the brain returns, before the execv; analyze._review_windows reads it for any window ending and REVIEW BLOCKING always prints the latest nightly's count. test_brain_keepalive.py 40/40, 20/20 suites green. apply_config_to_trader() NOT run (no S1 value moved).",
+  "notes": "2026-09-20: No S1 value changed \u2014 S1 is disabled, tuning it is theatre. FIXED review.py: version_push built its CHANGELOG entry from .night_report.json (inner ai_brain only) while `git add -u` staged the whole working tree, so the OUTER nightly session's work was committed and described as nothing. Audit: 18 nightly commits shipped 46 changed .py files under 'No changes \u2014 all parameters within target bounds'. Also: run_ai_brain RETURNS errors rather than raising, so a dead brain (2026-09-18, 8s, usage credits) published a clean bill of health. Entry now built from the staged diff and brain_error is carried into the report. ADDED analyze.py CONCURRENCY: 9/11 overlapping pairs concordant vs 54% independent baseline; SOLO n=12 meanR +0.330 vs CONCURRENT n=16 meanR -0.085. Report-only \u2014 MAX_TRADES is owner-locked and concurrency proxies regime.",
   "suspended_coins": {},
   "engine": "S1_DISABLED \u2014 live engine is strategy2.py (mean reversion). Every parameter in this file (min_score, min_adx, trail_pct, tp_ratio, session_*, watchlist, signal_weights) belongs to the RETIRED liquidity-pool engine and has NO effect while S1_ENABLED=False in live.py. S2's parameters live in strategy2.py."
 }

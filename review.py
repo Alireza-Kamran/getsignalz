@@ -386,6 +386,15 @@ def _self_improve():
 
         # ── Claude AI brain — deep code + strategy improvement ───────────────
         code_edits = []
+        # run_ai_brain RETURNS its failures in result["error"]; it does not
+        # raise. So the `except` below never fired on a brain that died, and
+        # the failure reached the owner's DM (via format_dm) and nowhere else.
+        # version_push then saw an empty change list and wrote "No changes --
+        # all parameters within target bounds" into the permanent, pushed
+        # CHANGELOG. 2026-09-18 is the worked example: the brain failed in 8s
+        # on a usage-credit error, and v1.53.2 records a clean bill of health
+        # for a review that never looked at anything. Carry it to the report.
+        brain_error = None
         try:
             from ai_brain import run_ai_brain, format_dm as brain_format_dm
             import time as _time
@@ -404,12 +413,14 @@ def _self_improve():
                         f"(book managed {brain_result['keepalive_passes']}x "
                         f"during the brain wait)")
             tg.dm_owner(brain_format_dm(brain_result))
+            brain_error = brain_result.get("error")
             if brain_result["changes_applied"]:
                 code_edits = [{"file": c["file"], "reason": c["reason"]}
                               for c in brain_result["changes_applied"]]
                 changes += [f"[AI] {c['file']}: {c['reason']}" for c in code_edits]
         except Exception as brain_err:
             import traceback
+            brain_error = f"{type(brain_err).__name__}: {brain_err}"
             tg.dm_owner(f"⚠️ Claude brain error: {tg.esc(brain_err)}\n<code>{tg.esc(traceback.format_exc()[:400])}</code>")
 
         # ── Version bump + GitHub push ────────────────────────────────────────
@@ -418,6 +429,7 @@ def _self_improve():
                 "date":         datetime.utcnow().date().isoformat(),
                 "rule_changes": changes,
                 "code_edits":   code_edits,
+                "brain_error":  brain_error,
                 "stats": {
                     "trades":    len(all_trades),
                     "win_rate":  round(wr, 1),
@@ -578,14 +590,22 @@ def _untracked_source(git):
         return []
 
 
-def version_push():
-    """Bump VERSION, append to CHANGELOG.md, commit and push to GitHub."""
+def version_push(repo="/root/trade", do_push=True):
+    """Bump VERSION, append to CHANGELOG.md, commit and push to GitHub.
+
+    `repo` and `do_push` exist so this can be exercised against a scratch
+    repository. The paths were hardcoded, which meant the only way to test what
+    this function writes into the permanent CHANGELOG was to read the source and
+    hope -- and that is precisely how the 2026-09-20 finding survived 18
+    commits. Defaults reproduce the live behaviour exactly; the live call site
+    passes nothing.
+    """
     import subprocess
 
-    REPORT  = "/root/trade/.night_report.json"
-    VER_F   = "/root/trade/VERSION"
-    CHNG_F  = "/root/trade/CHANGELOG.md"
-    REPO    = "/root/trade"
+    REPORT  = os.path.join(repo, ".night_report.json")
+    VER_F   = os.path.join(repo, "VERSION")
+    CHNG_F  = os.path.join(repo, "CHANGELOG.md")
+    REPO    = repo
 
     if not os.path.exists(REPORT):
         return  # no nightly run happened (e.g. <10 trades) — skip
@@ -600,6 +620,7 @@ def version_push():
 
         code_edits   = report.get("code_edits", [])
         rule_changes = report.get("rule_changes", [])
+        brain_error  = report.get("brain_error")
 
         if code_edits:
             minor += 1
@@ -609,6 +630,67 @@ def version_push():
 
         new_ver = f"{major}.{minor}.{patch}"
         atomic_write_text(VER_F, new_ver + "\n")
+
+        # ── Stage first, THEN describe ────────────────────────────────────────
+        # This order is the whole fix. `add -u` stages whatever is in the
+        # working tree -- which includes every file the OUTER nightly session
+        # (self_improve.sh -> claude -p) edited. The CHANGELOG text, however,
+        # was built from .night_report.json, which only the INNER ai_brain
+        # writes to. The two sources drifted completely apart: audited
+        # 2026-09-20, **18 nightly commits shipped 46 changed .py files under
+        # an entry reading "No changes -- all parameters within target
+        # bounds"** (v1.53.1 committed 112 lines of analyze.py that way).
+        #
+        # The commit's own staged diff is the only thing that cannot lie about
+        # what changed tonight, so describe the night from that. VERSION and
+        # CHANGELOG.md are deliberately written AFTER this point and staged
+        # separately below, so they never appear in their own file list.
+        def _git(*args):
+            # timeout is not optional: `git push` talks to the network,
+            # and a hang here parks the whole main loop. The watchdog in
+            # live.py would eventually restart the bot, but a hang that
+            # reproduces every night turns that into a restart loop.
+            try:
+                return subprocess.run(
+                    ["git", "-C", REPO] + list(args),
+                    capture_output=True, text=True, timeout=120
+                )
+            except subprocess.TimeoutExpired:
+                return subprocess.CompletedProcess(
+                    args, 1, "", "git timed out after 120s")
+
+        _git("add", "-u")                       # stage all tracked modified files
+
+        # `add -u` stages only files git ALREADY TRACKS, so for as long as this
+        # push has existed, every NEW module a nightly session wrote has been
+        # silently left out of every commit. Found 2026-09-06 by checking what
+        # `git ls-files` actually returns: brand.py and io_safe.py were both
+        # missing from the repository while being imported by tg.py, tracker.py
+        # and review.py itself -- a fresh clone could not start the bot -- along
+        # with five test files, i.e. the safety net was absent from the backup of
+        # the thing it protects. Nothing surfaced it because the commit succeeds:
+        # the loss is invisible until someone clones.
+        #
+        # Deliberately NOT `git add -A`. That would also sweep in 43 untracked
+        # design assets under avatar/ (generated PNGs, HTML mockups) whose place
+        # in the repo is Kamran's call, not this function's, and a nightly job
+        # that quietly starts committing binaries is worse than one that misses
+        # a file. Root-level *.py only: that is exactly the set the running
+        # process imports and the tests it is checked by.
+        #
+        # --exclude-standard is what keeps this safe -- it honours .gitignore,
+        # where config.py (API keys) sits on the first line. Dropping that flag
+        # would commit the secrets. Pinned by test_git_add_new.py.
+        _new = _untracked_source(_git)
+        if _new:
+            _git("add", *_new)
+
+        # Ground truth for "what changed tonight". Restricted to *.py for the
+        # same reason _untracked_source is: strategy_config.json's `last_updated`
+        # is rewritten every single night, so including it would fire this
+        # branch unconditionally and destroy the signal it exists to carry.
+        _staged = _git("diff", "--cached", "--name-only").stdout.split()
+        src_changed = sorted(f for f in _staged if f.endswith(".py"))
 
         # ── Build CHANGELOG entry ─────────────────────────────────────────────
         stats    = report.get("stats", {})
@@ -639,8 +721,30 @@ def version_push():
             lines.append("")
 
         if not param_changes and not ai_changes:
-            lines.append("No changes — all parameters within target bounds.")
-            lines.append("")
+            # Three distinct states that this branch used to collapse into one
+            # cheerful sentence. Keep them apart -- "nothing needed changing",
+            # "the reviewer never ran" and "the session changed code without
+            # declaring it" are not the same claim, and the middle one is the
+            # dangerous one to publish. See [[reference_silent_early_return]].
+            if brain_error:
+                lines.append(
+                    f"⚠️ **Review incomplete — the nightly AI brain did not run.** "
+                    f"No parameters were examined. Error: `{str(brain_error)[:200]}`"
+                )
+                lines.append("")
+            if src_changed:
+                lines.append(f"**Files changed this session ({len(src_changed)}):**")
+                for f in src_changed:
+                    lines.append(f"- {f}")
+                lines.append("")
+                lines.append(
+                    "Changed by the nightly session rather than by the parameter "
+                    "tuner; the write-up for this date is in the session log."
+                )
+                lines.append("")
+            elif not brain_error:
+                lines.append("No changes — all parameters within target bounds.")
+                lines.append("")
 
         lines.append("---")
         lines.append("")
@@ -656,53 +760,25 @@ def version_push():
         atomic_write_text(CHNG_F, new_content)
 
         # ── Git commit + push ─────────────────────────────────────────────────
-        def _git(*args):
-            # timeout is not optional: `git push` talks to the network,
-            # and a hang here parks the whole main loop. The watchdog in
-            # live.py would eventually restart the bot, but a hang that
-            # reproduces every night turns that into a restart loop.
-            try:
-                return subprocess.run(
-                    ["git", "-C", REPO] + list(args),
-                    capture_output=True, text=True, timeout=120
-                )
-            except subprocess.TimeoutExpired:
-                return subprocess.CompletedProcess(
-                    args, 1, "", "git timed out after 120s")
-
-        _git("add", "-u")                       # stage all tracked modified files
-        _git("add", "VERSION", "CHANGELOG.md")  # always include these two
-
-        # `add -u` stages only files git ALREADY TRACKS, so for as long as this
-        # push has existed, every NEW module a nightly session wrote has been
-        # silently left out of every commit. Found 2026-09-06 by checking what
-        # `git ls-files` actually returns: brand.py and io_safe.py were both
-        # missing from the repository while being imported by tg.py, tracker.py
-        # and review.py itself -- a fresh clone could not start the bot -- along
-        # with five test files, i.e. the safety net was absent from the backup of
-        # the thing it protects. Nothing surfaced it because the commit succeeds:
-        # the loss is invisible until someone clones.
-        #
-        # Deliberately NOT `git add -A`. That would also sweep in 43 untracked
-        # design assets under avatar/ (generated PNGs, HTML mockups) whose place
-        # in the repo is Kamran's call, not this function's, and a nightly job
-        # that quietly starts committing binaries is worse than one that misses
-        # a file. Root-level *.py only: that is exactly the set the running
-        # process imports and the tests it is checked by.
-        #
-        # --exclude-standard is what keeps this safe -- it honours .gitignore,
-        # where config.py (API keys) sits on the first line. Dropping that flag
-        # would commit the secrets. Pinned by test_git_add_new.py.
-        _new = _untracked_source(_git)
-        if _new:
-            _git("add", *_new)
+        # Everything except these two was staged above, before the entry text
+        # was written, so that the entry could be built from the staged diff.
+        _git("add", "VERSION", "CHANGELOG.md")
 
         commit_title = f"v{new_ver} — nightly {date_str}"
         if param_changes or ai_changes:
             total = len(param_changes) + len(ai_changes)
             commit_title += f": {total} improvement{'s' if total != 1 else ''}"
+        elif brain_error:
+            # Do not let a night the reviewer never ran read like a quiet one.
+            commit_title += ": review did not run"
+        elif src_changed:
+            commit_title += (f": {len(src_changed)} file"
+                             f"{'s' if len(src_changed) != 1 else ''} changed")
 
         _git("commit", "-m", commit_title)
+        if not do_push:
+            os.remove(REPORT)
+            return commit_title
         push = _git("push")
 
         if push.returncode == 0:

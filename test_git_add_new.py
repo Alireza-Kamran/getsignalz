@@ -126,7 +126,12 @@ finally:
 # ── SOURCE ORDER: the guard against a bare `git add` ─────────────────────────
 # _git("add") with no paths exits non-zero. The call must be conditional.
 SRC = open("/root/trade/review.py").read()
-body = SRC[SRC.index("def version_push()"):]
+# Match the `def` line without its parameter list. version_push gained
+# (repo, do_push) on 2026-09-20 so it could be exercised against a scratch
+# repo, and a needle pinned to the empty-parens spelling took this whole
+# suite down with a bare ValueError -- [[reference_stale_instruments]]: the
+# needle must describe what it is looking for, not how it was written once.
+body = SRC[SRC.index("def version_push("):]
 body_nc = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
 
 check("version_push calls _untracked_source", "_untracked_source(_git)" in body_nc)
