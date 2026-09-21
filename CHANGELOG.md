@@ -53,6 +53,20 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.53.5 — 2026-09-21
+
+**Stats:** 28 trades · WR: 36% · P&L: +144.7%
+
+⚠️ **Review incomplete — the nightly AI brain did not run.** No parameters were examined. Error: `Claude returned invalid JSON: Expecting value: line 1 column 1 (char 0) — raw: The `_mfe_seen` helper and the excursion floor fix are already fully in place. The primary improvement for tonight has be`
+
+**Files changed this session (2):**
+- analyze.py
+- test_excursion_floor.py
+
+Changed by the nightly session rather than by the parameter tuner; the write-up for this date is in the session log.
+
+---
+
 ## v1.53.4 — 2026-09-20
 
 **Stats:** 28 trades · WR: 36% · P&L: +144.7%

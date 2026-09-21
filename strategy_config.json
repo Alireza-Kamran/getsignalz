@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-09-20",
+  "last_updated": "2026-09-21",
   "updated_by": "auto-nightly",
   "min_score": 7,
   "max_trades": 1,
@@ -34,7 +34,7 @@
     "timeframe_1h": 1,
     "timeframe_15m": 0
   },
-  "notes": "2026-09-20: No S1 value changed \u2014 S1 is disabled, tuning it is theatre. FIXED review.py: version_push built its CHANGELOG entry from .night_report.json (inner ai_brain only) while `git add -u` staged the whole working tree, so the OUTER nightly session's work was committed and described as nothing. Audit: 18 nightly commits shipped 46 changed .py files under 'No changes \u2014 all parameters within target bounds'. Also: run_ai_brain RETURNS errors rather than raising, so a dead brain (2026-09-18, 8s, usage credits) published a clean bill of health. Entry now built from the staged diff and brain_error is carried into the report. ADDED analyze.py CONCURRENCY: 9/11 overlapping pairs concordant vs 54% independent baseline; SOLO n=12 meanR +0.330 vs CONCURRENT n=16 meanR -0.085. Report-only \u2014 MAX_TRADES is owner-locked and concurrency proxies regime.",
+  "notes": "2026-09-21: No S1 value changed \u2014 S1 is disabled, tuning it is theatre. FIXED analyze.py EXCURSION: threshold counts and the continuation table read the raw poll-sampled peak_roe_pct while _armed(), 25 lines below in the same function, correctly preferred the RECORDED locked_r. The ratchet only moves a stop to a level price actually traded through, so a lock is a hard floor on peak excursion. Four trades (SOL/SUI/ETH 08-21/OP 09-14) locked at exactly +2.50R while their sampled peaks read 2.32-2.46R, so every >=2.5R test scored four real arms as misses. reached>=2.5R 3/27 (11%) -> 7/27 (26%); continuation 2.0R->2.5R 38% -> 88%. Bias was ONE-SIDED (only winners arm, so only winners understated) \u2014 same shape as the 2026-08-17 stop-denominator bug. Two symptoms were printed in the report for weeks and never read as defects: >=2.5R count (3) contradicted the armed count (7) four lines apart, and SOL/SUI printed a NEGATIVE giveback (exiting above their own peak). Censoring flag moved from L>=arm to L>arm \u2014 reaching the arm level is now fully observable. Corrected givebacks now match the independently-computed RATCHET SLIPPAGE leaks exactly (+0.024/+0.059/+0.331/+0.062R). ADDED step-lag decomposition: un-harvested = leak +0.511R (execution) + lag +0.211R (TRAIL_STEP_R granularity) = 0.722R, 22% of gross. New test_excursion_floor.py 30/30.",
   "suspended_coins": {},
   "engine": "S1_DISABLED \u2014 live engine is strategy2.py (mean reversion). Every parameter in this file (min_score, min_adx, trail_pct, tp_ratio, session_*, watchlist, signal_weights) belongs to the RETIRED liquidity-pool engine and has NO effect while S1_ENABLED=False in live.py. S2's parameters live in strategy2.py."
 }

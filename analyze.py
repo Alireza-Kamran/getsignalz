@@ -938,6 +938,40 @@ def _excursion_stats(state):
     return out
 
 
+def _mfe_seen(x):
+    """Best available lower bound on a trade's true peak excursion, in R.
+
+    `peak_roe_pct` is SAMPLED by the tracker poll loop, so it undershoots the
+    real peak by up to one poll interval. `locked_r` is RECORDED: it is the
+    level update_sl() moved the stop to, and the ratchet only moves a stop to a
+    level price has actually traded through. So a recorded lock is a hard
+    lower bound on peak excursion -- a physical fact, not an estimate -- and
+    `max(mfe_r, locked_r)` is strictly closer to the truth than either alone.
+
+    Why this exists as a shared helper rather than inline: the bias is
+    ONE-SIDED BY CONSTRUCTION. Only trades that armed carry a lock, and only
+    winners arm, so reading raw `mfe_r` understates the excursion of winners
+    ONLY and leaves every loser correct. That is the same shape as the
+    2026-08-17 stop-denominator bug: an error that lands exclusively on the
+    fat tail that decides the book. Measured on 2026-09-21, four trades
+    (SOL/SUI 08-18, ETH 08-21, OP 09-14) had their stop locked AT +2.50R while
+    their recorded peak read 2.32-2.46R, so every >=2.5R test scored four real
+    arms as misses: the 2.0R->2.5R continuation printed 38% when the recorded
+    facts say 88%.
+
+    `locked_r` is 0.0 for trades that recorded the field but never armed, and
+    None for trades predating it (2026-08-16); max() handles both without a
+    special case. Returns None when no excursion was recorded at all -- a
+    measurement never taken is not a measurement of zero, see
+    [[mfe-not-realised-r]].
+    """
+    m = x.get("mfe_r")
+    if m is None:
+        return None
+    lk = x.get("locked_r")
+    return m if lk is None else max(m, float(lk))
+
+
 def _excursion_hazard(exc, levels=(0.5, 1.0, 1.5, 2.0, 2.5, 3.0)):
     """Conditional continuation: given a trade got to L, did it get to the next L?
 
@@ -963,10 +997,14 @@ def _excursion_hazard(exc, levels=(0.5, 1.0, 1.5, 2.0, 2.5, 3.0)):
     entry -- it is 2.5R being the level at which we stop watching. Rows at or
     above TRAIL_START_R are flagged so nobody reads a market claim off them.
 
-    Uses recorded MFE only. A trade whose excursion was never recorded is not a
-    trade whose excursion was zero -- see [[mfe-not-realised-r]].
+    Counts through `_mfe_seen`, NOT raw `mfe_r`: a trade whose stop the ratchet
+    locked at +2.50R demonstrably reached +2.50R, whatever the poll loop
+    happened to sample. Reading the raw column here put the single largest
+    distortion in this whole report on the one row that sits at the deployed
+    arming level. A trade whose excursion was never recorded is not a trade
+    whose excursion was zero -- see [[mfe-not-realised-r]].
     """
-    meas = [x for x in exc if x.get("mfe_r") is not None]
+    meas = [x for x in exc if _mfe_seen(x) is not None]
     unrecorded = len(exc) - len(meas)
     try:
         import strategy2
@@ -975,12 +1013,20 @@ def _excursion_hazard(exc, levels=(0.5, 1.0, 1.5, 2.0, 2.5, 3.0)):
         arm = None
     rows, prev_n, prev_lo = [], len(meas), 0.0
     for L in levels:
-        n = sum(1 for x in meas if x["mfe_r"] >= L)
+        n = sum(1 for x in meas if _mfe_seen(x) >= L)
         rows.append({
             "lo": prev_lo, "hi": L,
             "n_at_lo": prev_n, "n_at_hi": n,
             "p": (n / prev_n) if prev_n else None,
-            "censored": arm is not None and L >= arm,
+            # `L > arm`, not `>=`. Reaching the arming level itself is now
+            # FULLY observable: arming records `locked_r`, and _mfe_seen reads
+            # it, so "did it get to 2.5R" is answered by a recorded fact rather
+            # than by whether a poll happened to catch the tick. Only levels
+            # strictly ABOVE the arm are censored, because that is where the
+            # trade has already been closed and no poll can follow it. Leaving
+            # this at `>=` flagged the corrected 2.0->2.5 row as unreadable and
+            # would have buried the finding it exists to surface.
+            "censored": arm is not None and L > arm,
         })
         prev_n, prev_lo = n, L
     return rows, unrecorded, arm
@@ -1826,6 +1872,39 @@ def full_report():
             _lock = sum(x["locked_r"] for x in _slip)
             lines.append(f"  n={len(_slip)}  total leak {_tot:+.3f}R of {_lock:.2f}R locked "
                          f"({100*_tot/_lock:+.1f}%)  mean {_tot/len(_slip):+.3f}R/arm")
+            # STEP LAG -- the OTHER half of what the ratchet fails to capture,
+            # and a different cost with a different cause.
+            #
+            #   leak = locked_r - realised    execution: the fill came in below
+            #                                 the level the stop was resting at
+            #   lag  = peak     - locked_r    the ratchet never STEPPED that high;
+            #                                 price ran past it between polls
+            #
+            # Reporting only `leak` silently attributes the whole shortfall to
+            # execution and makes TRAIL_STEP_R look free. It is not: AAVE ran to
+            # 3.13R with the stop stepped to 3.00R. That 0.13R is not slippage,
+            # it is step granularity, and tightening RATCHET_SLIP_CAP cannot
+            # recover a single basis point of it.
+            _exc_by_key = {(x["coin"], x["opened"]): x for x in _excursion_stats(state)}
+            _lags = []
+            for x in _slip:
+                _e = _exc_by_key.get((x["coin"], x["opened"]))
+                _peak = _mfe_seen(_e) if _e else None
+                if _peak is not None:
+                    _lags.append((x, max(0.0, _peak - x["locked_r"])))
+            if _lags:
+                _totlag = sum(l for _, l in _lags)
+                _nonzero = [(x, l) for x, l in _lags if l > 0.005]
+                lines.append(f"  step lag (peak above the level the stop reached): "
+                             f"{_totlag:+.3f}R over {len(_lags)} arm(s)"
+                             + (f" — all of it on "
+                                + ", ".join(f"{x['coin']} {x['opened']} {l:+.3f}R"
+                                            for x, l in _nonzero)
+                                if _nonzero else " — none"))
+                lines.append(f"  TOTAL un-harvested = leak {_tot:+.3f}R + lag {_totlag:+.3f}R "
+                             f"= {_tot + _totlag:+.3f}R")
+                lines.append("  the two have DIFFERENT fixes: leak is execution (cap/placement),")
+                lines.append("  lag is TRAIL_STEP_R granularity. Both owner-locked; report only.")
             # Concentration check. A mean over 3 arms hides whether this is a
             # broad tax or one bad fill, and those have different fixes.
             _worst_arm = max(_slip, key=lambda v: v["slip_r"])
@@ -1977,7 +2056,10 @@ def full_report():
         # about excursion it never measured.
         meas   = [x for x in exc if x["mfe_r"] is not None and x["mae_r"] is not None]
         unmeas = [x for x in exc if x not in meas]
-        mfes = sorted(x["mfe_r"] for x in meas)
+        # _mfe_seen, not the raw poll sample -- a recorded ratchet lock proves
+        # price reached that level. See the helper for what reading the raw
+        # column cost this section.
+        mfes = sorted(_mfe_seen(x) for x in meas)
         n    = len(mfes)
         lines.append(f"\n── EXCURSION: WHAT THE ENTRY OFFERED (n={n}) ──")
         med  = mfes[n // 2] if n % 2 else (mfes[n // 2 - 1] + mfes[n // 2]) / 2
@@ -2026,10 +2108,11 @@ def full_report():
                          f"excursion — not counted as zero)")
         if haz_arm is not None:
             lines.append(f"    CENSORING: the ratchet arms at {haz_arm:.2f}R and closes the trade")
-            lines.append("    THERE, so no poll can observe an MFE above it on a trade that")
-            lines.append("    armed. Below that level this column measures the market; at and")
-            lines.append("    above it, it measures our exit. Do not read the last rows as a")
-            lines.append("    statement about how far price would have run.")
+            lines.append("    THERE, so no poll can observe an MFE ABOVE it on a trade that")
+            lines.append(f"    armed. Up to and including {haz_arm:.2f}R this column measures the")
+            lines.append("    market (arming records locked_r, which proves the level was")
+            lines.append("    reached); strictly above it, it measures our exit. Do not read")
+            lines.append("    the flagged rows as how far price would have run.")
         if arm_r is not None:
             # Recorded fact first, sampled proxy only where no record exists.
             def _armed(x):
@@ -2057,10 +2140,16 @@ def full_report():
                              f"MAE   n/a  ->  {x['real_r']:+5.2f}R  "
                              f"(excursion never recorded)  [{x['regime']}]")
                 continue
-            give = x["mfe_r"] - x["real_r"]
-            lines.append(f"    {x['coin']:<5} {x['opened']}  MFE {x['mfe_r']:+5.2f}R  "
+            # Print the corrected peak, and say so on the rows where it differs,
+            # so the column stays auditable against raw state.json rather than
+            # silently disagreeing with it.
+            seen = _mfe_seen(x)
+            note = ("" if abs(seen - x["mfe_r"]) < 1e-9
+                    else f"  [peak from locked_r; poll sampled {x['mfe_r']:+.2f}R]")
+            give = seen - x["real_r"]
+            lines.append(f"    {x['coin']:<5} {x['opened']}  MFE {seen:+5.2f}R  "
                          f"MAE {x['mae_r']:+5.2f}R  ->  {x['real_r']:+5.2f}R  "
-                         f"(gave back {give:+.2f}R)  [{x['regime']}]")
+                         f"(gave back {give:+.2f}R)  [{x['regime']}]{note}")
 
         # Invariant. A trade cannot exit above its own peak or below its own
         # trough, so MAE <= realised <= MFE holds by construction for every
@@ -2082,14 +2171,18 @@ def full_report():
         # unrecorded excursion coerced to 0.0 is how OP 2026-08-13 printed a
         # violation for a year-normal stop-out: MAE +0.00, realised -1.09,
         # MFE +0.00. The invariant was working; the input was fabricated.
+        # Checked against _mfe_seen for the same reason the counts are: a
+        # recorded lock is a better bound than a sampled peak, so using it
+        # makes this test STRICTER on losers (unchanged) and correct on
+        # winners, instead of leaning on TOL to absorb the sampling gap.
         TOL = 0.10
         bad = [x for x in meas
-               if x["real_r"] > x["mfe_r"] + TOL or x["real_r"] < x["mae_r"] - TOL]
+               if x["real_r"] > _mfe_seen(x) + TOL or x["real_r"] < x["mae_r"] - TOL]
         if bad:
             lines.append(f"  ⚠️  INVARIANT VIOLATED (MAE <= realised <= MFE, tol {TOL}R):")
             for x in bad:
                 lines.append(f"      {x['coin']} {x['opened']}: MAE {x['mae_r']:+.2f} "
-                             f"realised {x['real_r']:+.2f} MFE {x['mfe_r']:+.2f} "
+                             f"realised {x['real_r']:+.2f} MFE {_mfe_seen(x):+.2f} "
                              f"— excursion and realised R disagree on the stop")
         else:
             lines.append(f"  invariant MAE <= realised <= MFE: OK on all {len(meas)} "
