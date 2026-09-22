@@ -182,9 +182,159 @@ Rules for "old" field:
 
     parts.append("\n" + "=" * 70)
     parts.append(f"Today: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+    # The last line of a long prompt is the most attended position, and the
+    # OUTPUT contract stated ~37K tokens earlier was ignored on 2026-09-21:
+    # the reply was a prose paragraph and the whole review was discarded.
+    # `_extract_json` now recovers most of that, but not replying in prose is
+    # still cheaper than repairing it.
     parts.append("Analyse everything above and return your improvement JSON now.")
+    parts.append(
+        'Your ENTIRE reply must be one JSON object, starting with { and ending '
+        'with }. No prose before or after it, no code fences, no commentary. '
+        'If nothing is worth changing tonight, that is a valid and expected '
+        'answer -- say it INSIDE the object as {"analysis": "...", "changes": '
+        '[], "summary": "..."}, not as a sentence instead of it.')
 
     return "\n".join(parts)
+
+
+class _NoJSON(Exception):
+    """The brain produced output, but no JSON object could be found in it."""
+
+    def __init__(self, text: str):
+        super().__init__("no JSON object in reply")
+        self.text = text
+
+
+def _fenced_blocks(text: str):
+    """Yield the contents of every ``` fence, language tag stripped."""
+    for block in text.split("```")[1::2]:
+        nl = block.find("\n")
+        if nl != -1 and block[:nl].strip().lower() in ("", "json", "json5"):
+            block = block[nl + 1:]
+        yield block.strip()
+
+
+def _brace_spans(text: str):
+    """Yield every top-level {...} span, counting braces OUTSIDE string literals.
+
+    The obvious one-liner -- `text[text.find("{"):text.rfind("}") + 1]` -- is
+    wrong in both directions. It spans ACROSS two separate objects when the
+    model emits an example followed by its real answer, and it miscounts on a
+    brace inside a string value. That second case is not exotic here: this
+    brain's own schema puts free prose in "reason" and "summary", and the
+    prompt it reads is full of `{{` literals, so a brace inside a string is
+    the expected shape of a correct reply.
+    """
+    depth = 0
+    start = None
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                yield text[start:i + 1]
+
+
+def _extract_json(out: str) -> tuple[dict, str]:
+    """Return (obj, how) for the first parseable JSON OBJECT in `out`.
+
+    Until 2026-09-22 this was `json.loads(raw)` behind a fence-stripper that
+    only fired when the reply STARTED with ```. Every other shape was fatal,
+    and the whole review was discarded. On 2026-09-21 the brain ran for 772
+    seconds, answered in prose ("The `_mfe_seen` helper and the excursion floor
+    fix are already fully in place..."), and all of it was thrown away into a
+    300-char error string -- in a file (`.night_report.json`) that
+    `version_push` then deletes.
+
+    Three layers, cheapest first, because the failure is free to guard against
+    and expensive to hit:
+      1. the whole reply (the contract, and what a compliant model sends)
+      2. any fenced block, wherever it sits -- not just at offset 0
+      3. any balanced {...} span, for a reply with a prose preamble
+
+    Only a dict is accepted. `json.loads` returns an int for "5", None for
+    "null" and a list for "[1,2]"; the old code passed all three straight into
+    `parsed.get(...)`, where they raised AttributeError into the generic
+    handler and were reported to the owner as `Brain error: 'int' object has
+    no attribute 'get'`. That is a real error reported as the wrong error --
+    a schema violation dressed up as an internal crash. Rejecting non-dicts
+    here names the actual problem.
+    """
+    raw = (out or "").strip()
+    if not raw:
+        raise _NoJSON("")
+
+    cands = [(raw, "whole reply")]
+    cands += [(b, "fenced block") for b in _fenced_blocks(raw)]
+    cands += [(s, "embedded object") for s in _brace_spans(raw)]
+
+    for cand, how in cands:
+        if not cand:
+            continue
+        try:
+            obj = json.loads(cand)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(obj, dict):
+            return obj, how
+    raise _NoJSON(raw)
+
+
+# A repair pass carries only the model's own words plus the schema, so it is
+# ~1% of the 37K-token main prompt and returns in seconds. Its timeout is
+# short on purpose: it exists to rescue a review, never to extend one.
+REPAIR_TIMEOUT = 300
+
+_REPAIR_PROMPT = """A code-review assistant was asked to reply with ONLY a JSON
+object and instead replied in prose. Below is its reply verbatim. Re-express it
+as the required JSON object and output NOTHING else -- no prose, no code fences.
+
+Schema:
+{{"analysis": "<its assessment, 2-4 sentences>", "changes": [], "summary": "<one paragraph>"}}
+
+If the reply proposes concrete file edits, add one object per edit to "changes"
+with keys "file", "old", "new", "reason", copying the old/new text EXACTLY as
+the reply gives it. If it proposes no edit, leave "changes" as [].
+Invent nothing that is not in the reply below.
+
+REPLY TO CONVERT:
+{text}
+"""
+
+
+def _repair_json(text: str, keepalive=None) -> tuple[dict, str]:
+    """Ask the model to re-express its own prose reply as the schema.
+
+    Cheaper and more honest than re-running the full review: the analysis has
+    already been done and paid for, and a second full run would re-derive it
+    from scratch with no guarantee of a different output format. This pass
+    cannot invent a code change -- `_validate` still has to find `old` in the
+    file verbatim -- so the worst case is an empty `changes` list, which is
+    also the correct reading of a prose "nothing to change tonight".
+    """
+    rc, out, err, _passes = _run_claude(
+        ["claude", "--print", "--model", MODEL],
+        _REPAIR_PROMPT.format(text=text[:12000]),
+        keepalive=keepalive, timeout=REPAIR_TIMEOUT)
+    if rc != 0:
+        raise _NoJSON(text)
+    return _extract_json(out)
 
 
 def _validate(change: dict, code: str) -> str | None:
@@ -299,16 +449,28 @@ def run_ai_brain(keepalive=None) -> dict:
             result["error"] = f"claude CLI error (rc={rc}): {err[:300]}"
             return result
 
-        raw = out.strip()
-
-        # Strip accidental markdown fences
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.lower().startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
-
-        parsed = json.loads(raw)
+        try:
+            parsed, how = _extract_json(out)
+            result["json_source"] = how
+        except _NoJSON as no_json:
+            # The reply is prose. PRESERVE IT. The analysis is the expensive
+            # half of a brain run and it has already been paid for -- 772
+            # seconds of it on 2026-09-21, thrown away because of its wrapper.
+            result["analysis"] = no_json.text[:4000]
+            if not no_json.text:
+                result["error"] = ("Claude returned an EMPTY reply "
+                                   f"(rc=0, stderr: {err[:200]})")
+                return result
+            try:
+                parsed, how = _repair_json(no_json.text, keepalive=keepalive)
+                result["json_source"] = f"repaired via {how}"
+            except (_NoJSON, subprocess.TimeoutExpired) as rep_err:
+                result["error"] = (
+                    "Claude answered in prose, not JSON, and the repair pass "
+                    f"could not convert it ({type(rep_err).__name__}). The "
+                    "analysis it did produce is preserved and reported; no "
+                    "change was applied.")
+                return result
 
     except json.JSONDecodeError as e:
         result["error"] = f"Claude returned invalid JSON: {e} — raw: {out[:300]}"
@@ -320,7 +482,11 @@ def run_ai_brain(keepalive=None) -> dict:
         result["error"] = f"Brain error: {e}\n{traceback.format_exc()[:400]}"
         return result
 
-    result["analysis"] = parsed.get("analysis", "")
+    # `or` not `get(..., "")`: on the repair path result["analysis"] already
+    # holds the model's own prose, and a repair that returns an empty analysis
+    # field must not erase it. See [[reference_null_not_zero]] -- a key that is
+    # present and empty is not the same as an absent one.
+    result["analysis"] = parsed.get("analysis") or result["analysis"]
     result["summary"]  = parsed.get("summary", "")
     changes = parsed.get("changes", [])[:MAX_CHANGES]
 

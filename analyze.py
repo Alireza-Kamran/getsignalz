@@ -1304,6 +1304,91 @@ def _session_history(path=SELFLEARN_LOG, limit=14):
     return rows[::-1][:limit], stats
 
 
+CHANGELOG_LOG = "/root/trade/CHANGELOG.md"
+
+# `version_push` only started distinguishing "the brain ran and found nothing"
+# from "the brain never ran" in v1.53.4 (2026-09-20). Before that BOTH states
+# printed the identical cheerful sentence -- the 09-20 audit proved it, by
+# finding that 2026-09-18's brain died in 8 seconds while v1.53.2 published
+# "No changes -- all parameters within target bounds". So entries below this
+# version are NOT evidence the brain ran, and must not be counted as if they
+# were. That is the whole point of this section.
+_BRAIN_TRUTH_FROM = (1, 53, 4)
+
+_CL_ENTRY = re.compile(r"^## v(\d+)\.(\d+)\.(\d+) — (\d{4}-\d{2}-\d{2})", re.M)
+
+
+def _brain_history(path=CHANGELOG_LOG, limit=14):
+    """Mine CHANGELOG.md for whether the INNER ai_brain ran each night.
+
+    SUPERVISION above tracks the OUTER nightly session (self_improve.sh ->
+    claude -p) from selflearn.log. That is only half the loop. `review.py`
+    calls `ai_brain.run_ai_brain()` at 23:20, and THAT session has no log of
+    its own: `run_ai_brain` returns its failure in `result["error"]`, review.py
+    copies it into `.night_report.json`, and `version_push` DELETES that file
+    after reading it. The single durable trace is the CHANGELOG entry it wrote.
+
+    Which is why this reads the CHANGELOG and not a new ledger. A ledger would
+    start empty tonight, while the CHANGELOG already carries every night; and
+    a second record that is supposed to agree with the first is precisely what
+    drifted for 18 commits before 2026-09-20. See [[describe-the-artifact]].
+
+    Cost of not having this: the brain failed on 2026-09-20 (CLI permission
+    rule) and 2026-09-21 (answered in prose after running 772 seconds) and
+    neither night's report showed it. The 09-21 session recorded "supervision
+    resolved upstream" -- true of the outer session, and the inner one was dead
+    at that moment.
+
+    Returns (rows, stats); rows are (date, ver, status, detail) newest-first.
+    """
+    try:
+        txt = open(path, errors="replace").read()
+    except OSError:
+        return [], {}
+
+    marks = list(_CL_ENTRY.finditer(txt))
+    rows = []
+    for i, m in enumerate(marks):
+        ver = tuple(int(m.group(j)) for j in (1, 2, 3))
+        date = m.group(4)
+        body = txt[m.end():(marks[i + 1].start() if i + 1 < len(marks) else len(txt))]
+
+        err = re.search(r"Review incomplete[^`]*`([^`]*)`", body)
+        if err:
+            status, detail = "failed", err.group(1).strip()
+        elif re.search(r"\*\*(Parameter changes|Code improvements) \((\d+)\)", body):
+            n = sum(int(x) for x in re.findall(
+                r"\*\*(?:Parameter changes|Code improvements) \((\d+)\)", body))
+            status, detail = "applied", f"{n} change{'s' if n != 1 else ''}"
+        elif "No changes" in body:
+            # Truthful only from v1.53.4 on; ambiguous before it.
+            if ver >= _BRAIN_TRUTH_FROM:
+                status, detail = "clean", "no change proposed"
+            else:
+                status, detail = "ambiguous", "pre-v1.53.4 wording — cannot tell"
+        else:
+            status, detail = "nomark", "hand-written entry, no brain verdict"
+        rows.append((date, ver, status, detail))
+
+    # Sort, do NOT trust file order. Entries are normally PREPENDED (newest
+    # first), but v1.47.0 was inserted by hand above the header split and sits
+    # at the top of the file dated three weeks before its neighbours. One
+    # manual edit is enough to make "the first entry is the latest night" false,
+    # and this section's whole job is to notice a stale/missing latest night.
+    rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+
+    scored = [r for r in rows if r[2] in ("applied", "clean", "failed")]
+    stats = {
+        "n": len(rows),
+        "scored":    len(scored),
+        "ran":       sum(1 for r in scored if r[2] != "failed"),
+        "failed":    sum(1 for r in scored if r[2] == "failed"),
+        "ambiguous": sum(1 for r in rows if r[2] == "ambiguous"),
+        "nomark":    sum(1 for r in rows if r[2] == "nomark"),
+    }
+    return rows[:limit], stats
+
+
 def full_report():
     """
     Produce a full performance report as a string.
@@ -1373,6 +1458,38 @@ def full_report():
                          "and 15:00 UTC (weekly limits reset 14:00)")
     except Exception as _e:
         lines.append(f"\n── SUPERVISION ──\n  session history failed: {_e}")
+
+    # ── Brain health (did the INNER reviewer run?) ─────────────────
+    # Immediately after SUPERVISION because it is the other half of the same
+    # question. SUPERVISION says the outer session started; this says whether
+    # the reviewer it exists to run actually produced a verdict. On 09-20 and
+    # 09-21 the outer session was green and the inner brain was dead, and the
+    # report showed nothing.
+    try:
+        _brows, _bst = _brain_history()
+        if _bst.get("n"):
+            lines.append(f"\n── BRAIN HEALTH (inner reviewer, n={_bst['n']} nights) ──")
+            lines.append(f"  produced a verdict: {_bst['ran']}/{_bst['scored']} scored "
+                         f"nights   failed: {_bst['failed']}")
+            if _bst["ambiguous"]:
+                lines.append(f"  unclassifiable: {_bst['ambiguous']} night(s) printed "
+                             "'No changes' before v1.53.4, when that identical sentence "
+                             "was published BOTH for a clean review and for a brain that "
+                             "never ran — they are not counted above either way")
+            if _bst["nomark"]:
+                lines.append(f"  no verdict marker: {_bst['nomark']} entry(ies) — "
+                             "hand-written/owner sessions, not nightly brain runs")
+            _bf = [r for r in _brows if r[2] == "failed"]
+            if _bf:
+                lines.append("  recent failures (newest first):")
+                for _d, _v, _s, _why in _bf:
+                    lines.append(f"    ✗ {_d}  v{'.'.join(map(str, _v))}  {_why[:90]}")
+            else:
+                lines.append(f"  no brain failure in the last {len(_brows)} entries ✓")
+            lines.append("  a failed brain does NOT stop trading — the bot keeps running "
+                         "unreviewed, which is the same exposure SUPERVISION measures")
+    except Exception as _e:
+        lines.append(f"\n── BRAIN HEALTH ──\n  brain history failed: {_e}")
 
     # ── Loop latency (did the loop get to each candle ON TIME?) ────
     # Third, because AVAILABILITY above is binary: it asks whether an hour was
@@ -2655,15 +2772,15 @@ def _system_reliability():
     """Pillar 3 (20 pts): nightly cron health (last 7 sessions) + recent bot.log cleanliness."""
     cron_pts = 10.0
     try:
-        with open(SELFLEARN_F) as f:
-            text = f.read()
-        sessions = text.split("SELF-LEARN: ")[1:][-7:]
-        if sessions:
-            bad = sum(1 for s in sessions if any(
-                m in s for m in ("FATAL", "command not found", "OAuth session expired",
-                                  "Failed to authenticate")))
-            cron_pts = round((1 - bad / len(sessions)) * 10, 1)
-    except FileNotFoundError:
+        sess_rows, _ = _session_history(limit=7)
+        brain_rows, _ = _brain_history(limit=7)
+        outer = (sum(1 for r in sess_rows if r[2] == 0) / len(sess_rows)
+                 if sess_rows else 1.0)
+        scored = [r for r in brain_rows if r[2] in ("applied", "clean", "failed")]
+        inner = (sum(1 for r in scored if r[2] != "failed") / len(scored)
+                 if scored else 1.0)
+        cron_pts = round(outer * 5 + inner * 5, 1)
+    except Exception:
         pass
 
     log_pts = 10.0

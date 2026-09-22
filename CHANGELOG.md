@@ -53,6 +53,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.54.0 — 2026-09-22
+
+**Stats:** 28 trades · WR: 36% · P&L: +144.7%
+
+**Code improvements (1):**
+- analyze.py: The marker-string search misses usage-limit exits (the most common outer failure mode), which _session_history already detects correctly by exit code. It also cannot see inner brain failures at all: both the 09-20 CLI refusal (rc=1) and the 09-21 prose response scored as full supervisory health. Splitting the 10 cron_pts into 5 outer (exit-code accuracy via _session_history) and 5 inner (CHANGELOG brain-verdict via _brain_history, scored entries only to exclude pre-v1.53.4 ambiguous entries) means two consecutive brain failures now subtract roughly 1.4 points from the published score rather than zero. The empty-history default stays 1.0 for each half, preserving the 10.0 default when no records exist.
+
+---
+
 ## v1.53.5 — 2026-09-21
 
 **Stats:** 28 trades · WR: 36% · P&L: +144.7%
