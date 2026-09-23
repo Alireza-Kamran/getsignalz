@@ -33,6 +33,10 @@ fi
 LOG="${SELF_IMPROVE_LOG:-/root/trade/selflearn.log}"
 MARKER="${SELF_IMPROVE_MARKER:-/root/trade/.last_session}"
 LOCK="${SELF_IMPROVE_LOCK:-/root/trade/.self_improve.lock}"
+# Pin the model explicitly so a CLI default change or credit exhaustion on one
+# model does not silently kill the session. SELF_IMPROVE_MODEL can be overridden
+# by the caller (e.g. for testing a different model) without editing this file.
+SELF_IMPROVE_MODEL="${SELF_IMPROVE_MODEL:-claude-sonnet-4-6}"
 
 # scheduled | retry | retry-last  (see the cron block at the bottom of this file)
 MODE="${1:-scheduled}"
@@ -231,7 +235,7 @@ OUT_TMP="$(mktemp)"
 # does not mention it. acceptEdits means the session can write strategy2.py; the
 # prompt forbids it, this proves whether the prompt was honoured.
 LOCKED_BEFORE="$(md5sum /root/trade/strategy2.py | cut -d" " -f1)"
-timeout 3600 "$CLAUDE_BIN" -p --permission-mode acceptEdits "$PROMPT" > "$OUT_TMP" 2>&1
+timeout 3600 "$CLAUDE_BIN" -p --model "$SELF_IMPROVE_MODEL" --permission-mode acceptEdits "$PROMPT" > "$OUT_TMP" 2>&1
 RC=$?
 LOCKED_AFTER="$(md5sum /root/trade/strategy2.py | cut -d" " -f1)"
 if [ "$LOCKED_BEFORE" != "$LOCKED_AFTER" ]; then
