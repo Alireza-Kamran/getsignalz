@@ -55,6 +55,7 @@ def log_trade_open(coin, direction, entry, sl, tp, size, leverage, strategy="S1"
         "direction": direction,
         "entry":     entry,
         "sl":        sl,
+        "sl_orig":   sl,
         "tp":        tp,
         "size":      size,
         "leverage":  leverage,

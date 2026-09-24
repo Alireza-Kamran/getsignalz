@@ -53,6 +53,16 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.55.0 — 2026-09-24
+
+**Stats:** 28 trades · WR: 36% · P&L: +144.7%
+
+**Code improvements (2):**
+- tracker.py: max_dd (peak-to-trough drawdown, non-negative, computed from the live tracker state) is the correct value for this field but was being thrown away; max_adverse (deepest negative ROE, non-positive) was stored in its place, making the two fields identical duplicates. The fix stores the distinct quantity that was already computed and waiting.
+- journal.py: analyze._entry_stop() uses t.get('sl_orig') or t.get('sl') — for journal records the fallback always returns the right value because sl is written once and never updated, but the explicit field is missing. Adding sl_orig=sl at open time makes journal trades consistent with state.json records and removes the latent dependence on sl never being updated in the journal.
+
+---
+
 ## v1.54.1 — 2026-09-23
 
 **Stats:** 28 trades · WR: 36% · P&L: +144.7%

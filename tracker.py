@@ -1039,7 +1039,7 @@ def close_position(coin, exit_price, result, lev_pct, balance_before=None, balan
         state.setdefault("closed_trades", []).append({
             **t, "exit": exit_price, "result": result,
             "lev_pct": lev_pct, "max_adverse_pct": max_adverse,
-            "max_drawdown_pct": max_adverse, "peak_roe_pct": peak_roe,
+            "max_drawdown_pct": max_dd, "peak_roe_pct": peak_roe,
             "strategy": (t or {}).get("strategy", "S1"),
             # price move alone, before leverage
             "raw_pct": round(lev_pct / lev_used, 4) if lev_used else 0.0,
