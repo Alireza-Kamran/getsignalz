@@ -53,6 +53,14 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.55.1 — 2026-09-25
+
+**Stats:** 29 trades · WR: 38% · P&L: +245.5%
+
+⚠️ **Review incomplete — the nightly AI brain did not run.** No parameters were examined. Error: `claude CLI error (rc=1): Permission allow rule (../.claude/settings.json): Write(/opt/vps-backup/**) is not matched by file permission checks — only Edit(path) rules are. Use Edit(/opt/vps-backup/**) `
+
+---
+
 ## v1.55.0 — 2026-09-24
 
 **Stats:** 28 trades · WR: 36% · P&L: +144.7%
