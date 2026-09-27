@@ -53,6 +53,14 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.55.3 — 2026-09-27
+
+**Stats:** 29 trades · WR: 38% · P&L: +245.5%
+
+⚠️ **Review incomplete — the nightly AI brain did not run.** No parameters were examined. Error: `claude CLI error (rc=1): `
+
+---
+
 ## v1.55.2 — 2026-09-26
 
 **Stats:** 29 trades · WR: 38% · P&L: +245.5%
