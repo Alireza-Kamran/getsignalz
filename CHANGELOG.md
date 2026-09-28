@@ -53,6 +53,17 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.55.4 — 2026-09-28
+
+**Stats:** 30 trades · WR: 37% · P&L: +216.6%
+
+**Files changed this session (1):**
+- ai_brain.py
+
+Changed by the nightly session rather than by the parameter tuner; the write-up for this date is in the session log.
+
+---
+
 ## v1.55.3 — 2026-09-27
 
 **Stats:** 29 trades · WR: 38% · P&L: +245.5%

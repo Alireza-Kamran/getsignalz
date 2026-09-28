@@ -446,7 +446,9 @@ def run_ai_brain(keepalive=None) -> dict:
         result["keepalive_passes"] = passes
 
         if rc != 0:
-            result["error"] = f"claude CLI error (rc={rc}): {err[:300]}"
+            # Rate-limit messages go to stdout; stderr is empty in that case.
+            snippet = err[:300] if err.strip() else out[:300]
+            result["error"] = f"claude CLI error (rc={rc}): {snippet}"
             return result
 
         try:
