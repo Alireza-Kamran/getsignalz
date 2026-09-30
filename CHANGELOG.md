@@ -53,6 +53,16 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.56.0 — 2026-09-30
+
+**Stats:** 31 trades · WR: 36% · P&L: +172.2%
+
+**Code improvements (2):**
+- tracker.py: Module-level mutable dict avoids a `global` rebinding inside _update_drawdown; mutating the dict value does not require a global declaration in Python.
+- tracker.py: No drawdown-threshold DM exists anywhere in the codebase. At -19.2% (89% of the -21.7% historical max), Kamran needs a private notification — the bot cannot reduce S2 risk automatically, so a human decision is the only available response. Threshold 18% sits above the _self_improve S1 risk-reduction trigger (15%) and fires at most once per hour to suppress noise during a sustained drawdown. `time` and `tg` are already imported in tracker.py.
+
+---
+
 ## v1.55.5 — 2026-09-29
 
 **Stats:** 31 trades · WR: 36% · P&L: +172.2%

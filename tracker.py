@@ -33,6 +33,7 @@ from executor import BASE_URL as HL_URL
 
 _lock    = threading.Lock()
 _running = False
+_dd_state = {"warned_at": 0.0}  # mutable dict for drawdown-alert dedup
 
 
 # ── State persistence ─────────────────────────────────────────────────────────
@@ -648,6 +649,16 @@ def _update_drawdown(state, equity):
         stats["current_drawdown_pct"] = round(current_dd, 2)
         if current_dd > stats.get("max_drawdown_pct", 0):
             stats["max_drawdown_pct"] = round(current_dd, 2)
+        if current_dd >= 18.0 and time.time() - _dd_state["warned_at"] >= 3600:
+            _dd_state["warned_at"] = time.time()
+            try:
+                tg.dm_owner(
+                    f"⚠️ <b>کاهش سرمایه هشدار</b>\n"
+                    f"Drawdown: <b>{current_dd:.1f}%</b> "
+                    f"(max {stats.get('max_drawdown_pct', 0):.1f}%)\n"
+                    f"S2 risk is owner-locked — consider pausing manually.")
+            except Exception:
+                pass
 
     return stats
 
