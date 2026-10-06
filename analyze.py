@@ -2778,7 +2778,7 @@ def _system_reliability():
                  if sess_rows else 1.0)
         scored = [r for r in brain_rows if r[2] in ("applied", "clean", "failed")]
         inner = (sum(1 for r in scored if r[2] != "failed") / len(scored)
-                 if scored else 1.0)
+                 if scored else 0.5)
         cron_pts = round(outer * 5 + inner * 5, 1)
     except Exception:
         pass

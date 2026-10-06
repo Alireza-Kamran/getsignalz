@@ -652,10 +652,12 @@ def _update_drawdown(state, equity):
         if current_dd >= 18.0 and time.time() - _dd_state["warned_at"] >= 3600:
             _dd_state["warned_at"] = time.time()
             try:
+                hist_max = stats.get('max_drawdown_pct', current_dd)
+                headroom = max(0.0, hist_max - current_dd)
                 tg.dm_owner(
                     f"⚠️ <b>کاهش سرمایه هشدار</b>\n"
                     f"Drawdown: <b>{current_dd:.1f}%</b> "
-                    f"(max {stats.get('max_drawdown_pct', 0):.1f}%)\n"
+                    f"(worst {hist_max:.1f}%  —  {headroom:.1f}pp headroom)\n"
                     f"S2 risk is owner-locked — consider pausing manually.")
             except Exception:
                 pass

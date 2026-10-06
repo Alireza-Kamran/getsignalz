@@ -743,7 +743,8 @@ def _s2_report(header=""):
     losses = [t for t in trades if (t.get("lev_pct") or 0) < 0]
     lev_t  = sum(t.get("lev_pct") or 0 for t in trades)
     raw_t  = sum(t.get("raw_pct") or 0 for t in trades)
-    wr     = len(wins) / n * 100
+    decided = len(wins) + len(losses)
+    wr     = len(wins) / decided * 100 if decided > 0 else 0.0
 
     def avg(rows, key):
         return sum(r.get(key) or 0 for r in rows) / len(rows) if rows else 0.0
