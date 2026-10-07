@@ -346,15 +346,27 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
         panel.append(f"  {sp}")
 
     # Where price sits between the stop and the target, entry marked.
-    tgt = tp if tp_alive else (entry + direction * R * (locked_r or strategy2.TRAIL_START_R)) if R else tp
+    # After the ratchet arms (locked_r > 0), the old formula produced
+    # tgt = entry + direction * R * locked_r = sl, making sl == tgt and
+    # hiding the rail entirely. Point tgt at the NEXT lock level instead so
+    # the rail stays visible and consistent with the 'to next lock' bar below.
+    if R:
+        if tp_alive:
+            tgt = tp
+        elif sl_locked:
+            tgt = entry + direction * R * (locked_r + (strategy2.TRAIL_STEP_R or 1.0))
+        else:
+            tgt = entry + direction * R * strategy2.TRAIL_START_R
+    else:
+        tgt = tp
     # Anchor the rail at stop -> target rather than min -> max. On a SHORT the
     # target is BELOW the stop, so a min/max rail puts the stop on the right
     # while the caption underneath says it is on the left. Passing them in
     # trade order makes the fraction (v - sl) / (tgt - sl) come out right for
     # both directions -- the span is simply negative for a short.
     if sl != tgt:
+        right = "target" if tp_alive else ("next lock" if sl_locked else "locked")
         rail = brand.track(sl, tgt, {sl: "┃", entry: "┼", current_price: "●"}, width=24)
-        right = "target" if tp_alive else "locked"
         panel.append(f"  {rail}")
         panel.append(f"  {'stop':<{24 - len(right)}}{right}")
 

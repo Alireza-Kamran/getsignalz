@@ -53,6 +53,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.57.0 — 2026-10-07
+
+**Stats:** 33 trades · WR: 33% · P&L: +123.0%
+
+**Code improvements (1):**
+- tracker.py: When the ratchet arms, sl is set to entry + direction * R * locked_r. The old tgt formula produced the identical value, so sl == tgt and the rail block was skipped. Every armed S2 position lost its position-in-context graphic while the progress bar below it kept working. The fix aims tgt at the next lock level (locked_r + TRAIL_STEP_R), restoring the rail and updating its right-side label from 'locked' to 'next lock' to match. No order placement, stop levels, or trading logic are touched.
+
+---
+
 ## v1.56.6 — 2026-10-06
 
 **Stats:** 32 trades · WR: 34% · P&L: +143.1%
