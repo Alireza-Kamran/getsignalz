@@ -53,6 +53,14 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.57.3 — 2026-10-10
+
+**Stats:** 35 trades · WR: 34% · P&L: +144.8%
+
+No changes — all parameters within target bounds.
+
+---
+
 ## v1.57.2 — 2026-10-09
 
 **Stats:** 34 trades · WR: 32% · P&L: +96.9%
