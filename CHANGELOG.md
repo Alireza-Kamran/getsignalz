@@ -53,6 +53,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.58.0 — 2026-10-11
+
+**Stats:** 35 trades · WR: 34% · P&L: +144.8%
+
+**Code improvements (1):**
+- live.py: S2 was promoted out of shadow mode on 2026-07-26 and is now the sole live engine — it has been live for 77 days and accounts for all current signals and the entire ratcheted-stop edge. The nightly DM sent after every review still labels its statistics report '(سایه)' (shadow), which has been factually wrong for 3 months and could confuse cross-referencing against the notes. '(زنده)' (live) is accurate.
+
+---
+
 ## v1.57.3 — 2026-10-10
 
 **Stats:** 35 trades · WR: 34% · P&L: +144.8%
