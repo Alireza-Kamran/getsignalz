@@ -31,8 +31,18 @@ BASE_URL = TESTNET_URL if USE_TESTNET else MAINNET_URL
 HTTP_TIMEOUT = (5, 20)
 
 
+_info_instance = None
+
+
+def _get_info_client():
+    global _info_instance
+    if _info_instance is None:
+        _info_instance = Info(BASE_URL, skip_ws=True, timeout=HTTP_TIMEOUT)
+    return _info_instance
+
+
 def fetch_candles(symbol="ETH", interval="1h", lookback_bars=350):
-    info = Info(BASE_URL, skip_ws=True, timeout=HTTP_TIMEOUT)
+    info = _get_info_client()
     end_ms = int(time.time() * 1000)
     interval_ms = {"1m":60000,"5m":300000,"15m":900000,"1h":3600000,"4h":14400000,"1d":86400000}
     start_ms = end_ms - lookback_bars * interval_ms[interval]

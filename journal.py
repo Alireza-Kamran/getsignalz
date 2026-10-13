@@ -6,16 +6,19 @@ Reviewed nightly and weekly to improve strategy.
 import json
 import os
 from datetime import datetime, timezone
-from io_safe import atomic_write_json
+from io_safe import atomic_write_json, read_json_with_fallback
 
 JOURNAL_FILE = "/root/trade/journal.json"
 
 
 def _load():
-    if not os.path.exists(JOURNAL_FILE):
+    if not os.path.exists(JOURNAL_FILE) and not os.path.exists(JOURNAL_FILE + ".bak"):
         return {"trades": [], "signals": [], "reviews": []}
-    with open(JOURNAL_FILE) as f:
-        return json.load(f)
+    obj, _ = read_json_with_fallback(JOURNAL_FILE, logger=lambda m: print(f"[journal] {m}"))
+    if obj is None:
+        print(f"[journal] WARNING: {JOURNAL_FILE} and its backup are both unreadable — returning empty journal")
+        return {"trades": [], "signals": [], "reviews": []}
+    return obj
 
 
 def _save(data):

@@ -53,6 +53,17 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.59.0 — 2026-10-13
+
+**Stats:** 36 trades · WR: 33% · P&L: +109.4%
+
+**Code improvements (3):**
+- indicators.py: Creating a new Info() — and therefore a new requests.Session with its own TCP/TLS connection pool — on every fetch_candles call discards the connection that was just established and rebuilds it on the next call. The bot calls fetch_candles approximately 40+ times per hour: 12-coin S1 scan via quick_state, the S2 scan inside strategy2.find_setup, and the 8-coin S2-only observability loop in live.py. A module-level singleton reuses one session across all calls, eliminating redundant handshake overhead on every candle fetch without changing any observable behaviour (Info with skip_ws=True is stateless between requests).
+- journal.py: Required import for the _load robustness improvement below; read_json_with_fallback is already present in io_safe and is already imported by tracker.py.
+- journal.py: journal.json is written atomically via atomic_write_json which keeps a .bak copy, but _load had no recovery path: a corrupt or partially-written primary file would raise json.JSONDecodeError and crash the nightly review, weekly review, Trust Score computation, and dashboard update simultaneously. This mirrors the existing pattern in tracker.load_state but returns an empty journal rather than raising — journal data is historical and analytical so degrading to an empty record is safe and recoverable, whereas an unreadable position book is not.
+
+---
+
 ## v1.58.1 — 2026-10-12
 
 **Stats:** 36 trades · WR: 33% · P&L: +109.4%
