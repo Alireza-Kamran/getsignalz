@@ -1888,6 +1888,39 @@ def full_report():
         lines.append(f"  {k:<6} {ds['n']} trades  WR:{ds['w']/ds['n']*100:.0f}%  "
                      f"sumR:{ds['r']:+.2f}  meanR:{ds['r']/ds['n']:+.3f}")
     lines.append("  (structural baseline from backtest: ~72% long / ~28% short)")
+    if signals:
+        dir_rsi = defaultdict(lambda: defaultdict(lambda: {"n": 0, "w": 0, "r": 0.0}))
+        for t in trades:
+            sig = _sig_for(t, signals)
+            r   = _r_of(t)
+            if sig is None or r is None:
+                continue
+            d     = t.get("direction")
+            rsi_v = sig.get("rsi")
+            if d is None or rsi_v is None:
+                continue
+            dk = "LONG" if d == 1 else "SHORT"
+            rk = (f"RSI {_band([20, 23, 25], rsi_v, ['<20', '20-23', '23-25', '25+'])}"
+                  if d == 1 else
+                  f"RSI {_band([75, 77, 80], rsi_v, ['<75', '75-77', '77-80', '80+'])}")
+            dir_rsi[dk][rk]["n"] += 1
+            dir_rsi[dk][rk]["w"] += 1 if r > 0 else 0
+            dir_rsi[dk][rk]["r"] += r
+        any_cell = any(cs["n"] >= 2
+                       for d_cells in dir_rsi.values()
+                       for cs in d_cells.values())
+        if any_cell:
+            lines.append("  RSI cells by direction (signal log; accumulator, n too small to act):")
+            for dk, rk_order in (("LONG",  ["RSI <20", "RSI 20-23", "RSI 23-25", "RSI 25+"]),
+                                  ("SHORT", ["RSI <75", "RSI 75-77", "RSI 77-80", "RSI 80+"])):
+                cells = dir_rsi.get(dk, {})
+                for rk in rk_order:
+                    cs = cells.get(rk)
+                    if cs is None or cs["n"] < 2:
+                        continue
+                    lines.append(f"    {dk:<6} {rk:<14} n={cs['n']:2}  "
+                                 f"WR:{cs['w']/cs['n']*100:3.0f}%  "
+                                 f"meanR:{cs['r']/cs['n']:+.3f}")
 
     # ── Concurrency ────────────────────────────────────────────────
     # DIRECTION SPLIT asks what we bet on. This asks how many bets we were

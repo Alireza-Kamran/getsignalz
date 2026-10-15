@@ -53,6 +53,17 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.59.2 — 2026-10-15
+
+**Stats:** 38 trades · WR: 32% · P&L: +59.7%
+
+**Files changed this session (1):**
+- analyze.py
+
+Changed by the nightly session rather than by the parameter tuner; the write-up for this date is in the session log.
+
+---
+
 ## v1.59.1 — 2026-10-14
 
 **Stats:** 36 trades · WR: 33% · P&L: +109.4%
