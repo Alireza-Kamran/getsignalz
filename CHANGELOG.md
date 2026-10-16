@@ -6,6 +6,28 @@ All nightly improvements are logged here automatically.
 > never given entries here — the nightly sessions bumped the version in the commit subject
 > only. Their full write-ups are in the memory file's session log for those dates.
 
+## v1.59.3 — 2026-10-16 — NOTES ONLY
+
+strategy_config.json updated. No .py files changed. No restart.
+
+**New closes (+2, n=38 total):** BNB LONG -0.95R (dirty MAE -0.42R; ADX rose from ≤25 to 49-50
+during hold — trend reasserted against mean reversion). DOGE LONG -1.23R (fill +0.537% past
+trigger = -0.231R dev slippage; DOGE feed 11.9% frozen, unusable tier validated by this trade).
+
+**MAE hypothesis (4/4 → watching SOL):** Clean MAE (≤0.10R) → ratcheted wins; dirty MAE (≥0.40R)
+→ losses. SOL LONG at -0.63R (largest dirty MAE observed) is open, now +1.05R, ratchet not armed
+(peaked +1.73R, needs 2.50R). If SOL stops: hypothesis 5/5.
+
+**Direction asymmetry widening:** SHORT 14 trades WR 36% meanR +0.220R. LONG 24 trades WR 29%
+meanR -0.188R. RSI 77-80 shorts n=5 WR 60% meanR +0.986 (best cell). RSI 23-25 longs n=4 WR 0%
+meanR -1.059 (worst cell). All thresholds owner-locked — observation only.
+
+**Statistical state:** WR 31.6%, EV -0.038R/trade, t=-0.15 (not significant). Need ~50 more
+trades (n≥88) before t>2.0.
+
+**Feed health:** 13.1% frozen overall (5th consecutive marginal improvement). 9 of 20 coins
+still in unusable tier (≥10% frozen).
+
 ## v1.47.0 — 2026-09-04 — CHANNEL VOICE, NAKED POSITIONS, AND NON-ATOMIC STATE
 
 Owner-driven session, not a nightly. Three pieces of work.
