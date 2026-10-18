@@ -327,6 +327,9 @@ def _live_text(t, current_price, closed=False, close_result=None, final_pct=None
         rows.insert(3, ("Target", f"{brand.fmt_px(tp)}   {_r_of(tp)}"))
     if peak_roe > 0:
         rows.append(("Peak", f"+{peak_roe:.1f}%"))
+        if not sl_locked and peak_roe > 10 and lev_pnl < peak_roe * 0.7:
+            giveback_pp = peak_roe - max(lev_pnl, 0.0)
+            rows.append(("Gave back", f"-{giveback_pp:.1f}pp  ({giveback_pp / peak_roe * 100:.0f}% of peak)"))
     if max_adv < 0:
         rows.append(("Max drawdown", f"{max_adv:.1f}%"))
 

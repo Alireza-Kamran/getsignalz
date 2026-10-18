@@ -75,6 +75,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.60.0 — 2026-10-18
+
+**Stats:** 38 trades · WR: 32% · P&L: +59.7%
+
+**Code improvements (1):**
+- tracker.py: Near-miss #5 forming: SOL peaked at ~+44% leveraged ROE and has given back 78% to ~+4%, but the live message requires mental arithmetic to see this. When an unlocked trade's current P&L is below 70% of a peak that exceeded 10% leveraged ROE, a 'Gave back' row is now appended immediately after Peak — e.g. '-40.3pp (91% of peak)'. Capping at max(lev_pnl, 0) prevents the giveback from exceeding 100% when the trade is currently underwater (the loss portion is already shown in 'Max drawdown'). Threshold of peak_roe > 10 and giveback > 30% suppresses noise on small or routine fluctuations. All five confirmed near-misses in the record would have triggered this row; normal trades near their peak do not.
+
+---
+
 ## v1.59.5 — 2026-10-17
 
 **Stats:** 38 trades · WR: 32% · P&L: +59.7%
