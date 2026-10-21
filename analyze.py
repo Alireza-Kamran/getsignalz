@@ -1618,18 +1618,21 @@ def full_report():
             for s, e, k, how, passes, _b in _wins:
                 _pos = _open_during(s, e, _st)
                 if _pos:
-                    _exposed.append((s, e, k, how, passes, _pos))
+                    _exposed.append((s, e, k, how, passes, _b, _pos))
             if not _exposed:
                 lines.append("  no review crossed an open position ✓")
             else:
-                _unman = sum((e - s).total_seconds() for s, e, _k, _h, p, _ in _exposed
+                _unman = sum((e - s).total_seconds() for s, e, _k, _h, p, _b2, _ in _exposed
                              if not p)
                 lines.append(f"  ⚠️  {len(_exposed)} review(s) crossed an open position "
                              f"— {_unman/60:.0f} min with the ratchet FROZEN:")
-                for s, e, k, how, passes, pos in _exposed:
+                for s, e, k, how, passes, bsecs, pos in _exposed:
                     _coins = ", ".join(f"{c} {d}" for c, d, _ in pos)
                     if passes:
                         _tag = f"managed — book polled {passes}x during the brain wait"
+                    elif passes == 0 and bsecs is not None and bsecs < 60:
+                        _tag = (f"‼️  0 keepalive passes — brain exited in {bsecs}s "
+                                f"(usage limit / CLI error), ratchet frozen")
                     elif passes == 0:
                         _tag = "‼️  0 keepalive passes — hook NOT installed, ratchet frozen"
                     else:
