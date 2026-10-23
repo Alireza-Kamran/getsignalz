@@ -1455,7 +1455,7 @@ def run():
                                    s2_best["sl"], s2_best["tp"], strategy2.TF,
                                    adx=s2_best["adx"], rsi=s2_best["rsi"],
                                    ssl=None, session_hour=h,
-                                   stretch=s2_best.get("stretch"))
+                                   stretch=s2_best.get("stretch"), strategy="S2")
                         if not res2:
                             # The CHANNEL is a different matter. This used to
                             # post unconditionally, before res2 was even

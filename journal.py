@@ -26,7 +26,8 @@ def _save(data):
 
 
 def log_signal(coin, direction, score, reasons, price, sl, tp, tf,
-               fired=True, adx=None, rsi=None, ssl=None, session_hour=None, stretch=None):
+               fired=True, adx=None, rsi=None, ssl=None, session_hour=None, stretch=None,
+               strategy="S1"):
     data = _load()
     data["signals"].append({
         "time":         datetime.now(timezone.utc).isoformat(),
@@ -44,6 +45,7 @@ def log_signal(coin, direction, score, reasons, price, sl, tp, tf,
         "ssl":          ssl,
         "session_hour": session_hour,
         "stretch":      stretch,
+        "strategy":     strategy,
     })
     _save(data)
 
