@@ -75,6 +75,18 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.61.0 — 2026-10-24
+
+**Stats:** 40 trades · WR: 32% · P&L: +97.9%
+
+**Code improvements (4):**
+- journal.py: Accept leverage from both signal engines so the journal record is self-describing; analysis no longer needs to re-derive it from sl_pct, which can differ from the placed value when price moves between signal evaluation and order execution.
+- journal.py: Persist leverage alongside stretch, rsi, and adx so every entry-condition analysis and any future leverage-bucketed reporting reads the same number that was actually placed, not a value re-derived from sl_pct after the fact.
+- live.py: Pass the S1 scanner's computed leverage through to the journal so analysis can correlate leverage level with trade outcome without re-deriving it from sl_pct.
+- live.py: Pass the S2 scanner's leverage through to the journal. Strategy2 computes it from sl_pct at signal time; recording it then captures the intended value before any price drift between signal and fill can change the re-derived figure.
+
+---
+
 ## v1.60.5 — 2026-10-23
 
 **Stats:** 39 trades · WR: 33% · P&L: +115.2%

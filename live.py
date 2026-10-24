@@ -1455,7 +1455,8 @@ def run():
                                    s2_best["sl"], s2_best["tp"], strategy2.TF,
                                    adx=s2_best["adx"], rsi=s2_best["rsi"],
                                    ssl=None, session_hour=h,
-                                   stretch=s2_best.get("stretch"), strategy="S2")
+                                   stretch=s2_best.get("stretch"), strategy="S2",
+                                   leverage=s2_best.get("leverage"))
                         if not res2:
                             # The CHANNEL is a different matter. This used to
                             # post unconditionally, before res2 was even
@@ -1641,7 +1642,8 @@ def run():
                     log_signal(best["coin"], best["direction"], best["score"],
                                best["reasons"], best["price"], best["sl"], best["tp"], best.get("tf", TF),
                                adx=best.get("adx"), rsi=best.get("rsi"),
-                               ssl=best.get("macro"), session_hour=h)
+                               ssl=best.get("macro"), session_hour=h,
+                               leverage=best.get("leverage"))
 
                     leverage = best.get("leverage", 10)
 
