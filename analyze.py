@@ -2871,7 +2871,7 @@ def _watchlist_health(journal, config):
         coin_pct[c] += t.get("lev_pct", 0) or 0
 
     overdue = [c for c in watchlist
-               if coin_n[c] >= 5 and coin_wins[c] == 0 and coin_pct[c] < 0]
+               if coin_n[c] >= 5 and (coin_wins[c] / coin_n[c]) < 0.30 and coin_pct[c] < 0]
     overdue_pts = 0.0 if overdue else 6.0
 
     covered = sum(1 for c in watchlist if coin_n[c] >= 3)

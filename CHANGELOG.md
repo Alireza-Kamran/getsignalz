@@ -75,6 +75,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.62.0 — 2026-10-27
+
+**Stats:** 40 trades · WR: 32% · P&L: +97.9%
+
+**Code improvements (1):**
+- analyze.py: The removal criterion documented in strategy_config.json is '<30% WR AND negative total PnL over >=5 trades'. The old check required exactly zero wins, so BTC (n=7, WR 14%, sumR ≈-8R) passes the gate silently even though it meets the documented bar. Aligning the code with the specification makes the Trust Score accurately reflect the watchlist state and reinforces Kamran's pending BTC decision with a concrete Trust Score signal rather than false reassurance.
+
+---
+
 ## v1.61.2 — 2026-10-26
 
 **Stats:** 40 trades · WR: 32% · P&L: +97.9%
