@@ -373,6 +373,24 @@ def _self_improve():
                 flag  = " ⛔" if coin in suspended else ""
                 lines.append(f"  {coin:<8} {cp['n']}t  WR:{c_wr:.0f}%  Avg:{c_avg:+.1f}%{flag}")
 
+        # S2 watchlist coins that have crossed the removal bar are flagged here
+        # separately because _self_improve()'s auto-suspension only covers the
+        # S1 watchlist (strategy_config.json); strategy2.WATCHLIST is never touched.
+        try:
+            import strategy2 as _s2wl
+            s2_removal = [(c, cp) for c, cp in coin_perf.items()
+                          if c in _s2wl.WATCHLIST and cp["n"] >= 5
+                          and cp["w"] / cp["n"] < 0.30 and cp["pct"] < 0]
+            if s2_removal:
+                lines.append("\n🚨 <b>S2 WATCHLIST — removal bar crossed (owner decision needed):</b>")
+                for c, cp in sorted(s2_removal, key=lambda x: x[1]["pct"]):
+                    c_wr = cp["w"] / cp["n"] * 100
+                    n_t = cp["n"]
+                    sum_pnl = cp["pct"]
+                    lines.append(f"  ⚠️ {c:<6} n={n_t}  WR:{c_wr:.0f}%  sumPnL:{sum_pnl:+.1f}%  — remove from strategy2.WATCHLIST")
+        except Exception:
+            pass
+
         # Top confluence signals
         if best_signals:
             lines.append(f"\n🔍 <b>Best confluence signals:</b>")

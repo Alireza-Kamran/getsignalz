@@ -75,6 +75,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.63.0 — 2026-10-28
+
+**Stats:** 40 trades · WR: 32% · P&L: +97.9%
+
+**Code improvements (1):**
+- review.py: The auto-suspension logic in _self_improve() only removes coins from strategy_config.json's watchlist — the retired S1 engine. strategy2.WATCHLIST is never touched by it. BTC has met the removal bar for 25 consecutive sessions (n=7, WR 14%, sumPnL≈-189%) and appears in the coin leaderboard, but without an explicit removal label the owner must manually apply the threshold to an unlabeled row each night. This block tests the same criterion against strategy2.WATCHLIST and adds a clearly-labelled section to the nightly DM naming each qualifying coin and the exact file to edit, turning a recurring observation buried in a table into an actionable alert.
+
+---
+
 ## v1.62.0 — 2026-10-27
 
 **Stats:** 40 trades · WR: 32% · P&L: +97.9%
