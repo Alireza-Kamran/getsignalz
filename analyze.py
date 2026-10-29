@@ -2858,7 +2858,11 @@ def _strategy_stability():
 
 def _watchlist_health(journal, config):
     """Pillar 5 (10 pts): no active-watchlist coin sitting past its removal bar, plus data coverage."""
-    watchlist = config.get("watchlist", [])
+    try:
+        import strategy2 as _s2w
+        watchlist = list(_s2w.WATCHLIST)
+    except Exception:
+        watchlist = config.get("watchlist", [])
     trades = [t for t in journal.get("trades", []) if t.get("result")]
 
     coin_n = defaultdict(int)
