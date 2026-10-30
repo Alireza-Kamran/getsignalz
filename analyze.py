@@ -2627,6 +2627,22 @@ def full_report():
                 lines.append(f"  OVERALL: {overall_f}/{overall_n} = "
                              f"{overall_f/overall_n*100:.1f}%")
                 lines.append("  (baseline: 18.5% testnet 2026-08-05 vs 0.4% mainnet)")
+                # Cross-reference open positions against feed quality.  A coin
+                # can appear in OPEN BOOK and FEED HEALTH simultaneously; that
+                # combination is the worst case (degraded indicators guiding a
+                # live position) and deserves a single visible flag rather than
+                # two separate lines the reader must mentally join.
+                _open_on_bad_feed = [
+                    (c, stale[c][2])
+                    for c in _tracked
+                    if c in stale and stale[c][2] > 0.10
+                ]
+                if _open_on_bad_feed:
+                    for _oc, _of in _open_on_bad_feed:
+                        lines.append(
+                            f"  ‼️  {_oc} IS CURRENTLY OPEN on a {_of*100:.1f}% frozen feed — "
+                            f"RSI/ADX/stretch computed on this coin may be unreliable"
+                        )
 
                 # Does a dirty feed actually cost money, or is it only ugly?
                 # The trade record can answer that by joining each closed trade
