@@ -1768,8 +1768,17 @@ def full_report():
     lines.append(f"Total trades:    {len(trades)}")
     lines.append(f"Win rate:        {stats.get('win_rate', 0):.1f}%")
     lines.append(f"Total P&L:       {stats.get('total_pct', 0):+.1f}% (leveraged)")
-    lines.append(f"Max drawdown:    -{stats.get('max_drawdown_pct', 0):.1f}%")
-    lines.append(f"Peak equity:     ${stats.get('peak_balance', 0):.2f}")
+    _max_dd   = stats.get('max_drawdown_pct', 0)
+    _peak     = stats.get('peak_balance', 0)
+    _start    = stats.get('start_balance', 0)
+    _dd_floor = ((_peak - _start) / _peak * 100) if _peak and _start else None
+    if _dd_floor is not None and _max_dd > _dd_floor + 5:
+        lines.append(f"Max drawdown:    -{_max_dd:.1f}%  ⚠️ pre-history (predates start_balance; worst since start ≤{_dd_floor:.1f}%)")
+    else:
+        lines.append(f"Max drawdown:    -{_max_dd:.1f}%")
+    lines.append(f"Peak equity:     ${_peak:.2f}")
+    if _start:
+        lines.append(f"Start equity:    ${_start:.2f}  (account gain since start: {(_peak/_start - 1)*100:+.1f}% peak / {(stats.get('current_drawdown_pct',0)):.1f}% current DD from peak)")
 
     if len(trades) < 5:
         lines.append(f"\n⚠️  Only {len(trades)} closed trades — insufficient for statistical analysis.")
