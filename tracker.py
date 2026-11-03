@@ -868,6 +868,27 @@ def _loop():
                     series = list(tr.get("price_series") or [])
                     series.append(round(price, 8))
                     tr["price_series"] = series[-PRICE_SERIES_MAX:]
+                    if (tr.get("strategy") == "S2"
+                            and not (tr.get("locked_r") or 0.0) > 0
+                            and not tr.get("stale_alerted_72h")):
+                        try:
+                            _op = datetime.fromisoformat(
+                                str(tr.get("opened_at", "")).replace("Z", ""))
+                            if _op.tzinfo is not None:
+                                _op = _op.replace(tzinfo=None)
+                            _age_h = (datetime.utcnow() - _op).total_seconds() / 3600
+                            if _age_h >= 72:
+                                tr["stale_alerted_72h"] = True
+                                tg.dm_owner(
+                                    f"⏳ <b>{coin}: پوزیشن قدیمی</b>\n"
+                                    f"⏳ <b>{coin}: Stale position</b>\n"
+                                    f"{_age_h:.0f}h باز، ریچت فعال نشده\n"
+                                    f"{_age_h:.0f}h open, ratchet not armed\n"
+                                    f"استاپ هنوز در -1R است\n"
+                                    f"Stop still at -1.00R — consider manual review"
+                                )
+                        except Exception:
+                            pass
                     save_state(state2)
 
                 # Edit live message with HL-accurate data

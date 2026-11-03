@@ -75,6 +75,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.64.0 — 2026-11-03
+
+**Stats:** 44 trades · WR: 34% · P&L: +111.9%
+
+**Code improvements (1):**
+- tracker.py: An S2 mean-reversion trade open for 72+ hours without the ratchet arming means the reversal premise has likely expired. Currently there is no alert for this; the owner can only notice by watching the dashboard. LDO is 118h open with 27% frozen feed and peak MFE only 1.14R against the 2.50R arming threshold — this alert would have fired 46 hours ago. The stale_alerted_72h flag on the state record ensures the DM fires exactly once per position, not every 60s.
+
+---
+
 ## v1.63.5 — 2026-11-02
 
 **Stats:** 44 trades · WR: 34% · P&L: +111.9%
