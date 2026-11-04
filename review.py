@@ -367,7 +367,7 @@ def _self_improve():
         # Coin leaderboard
         if coin_perf:
             lines.append(f"\n🏆 <b>Coin leaderboard:</b>")
-            for coin, cp in sorted(coin_perf.items(), key=lambda x: -x[1]["pct"])[:8]:
+            for coin, cp in sorted(coin_perf.items(), key=lambda x: -x[1]["pct"]):
                 c_wr  = cp["w"] / cp["n"] * 100
                 c_avg = cp["pct"] / cp["n"]
                 flag  = " ⛔" if coin in suspended else ""

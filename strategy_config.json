@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "last_updated": "2026-11-03",
+  "last_updated": "2026-11-04",
   "updated_by": "auto-nightly",
   "min_score": 7,
   "max_trades": 1,
@@ -21,8 +21,7 @@
     "AVAX",
     "ATOM",
     "OP",
-    "APT",
-    "DOGE"
+    "APT"
   ],
   "signal_weights": {
     "base_zone_target": 2,
@@ -34,7 +33,9 @@
     "timeframe_1h": 1,
     "timeframe_15m": 0
   },
-  "notes": "2026-11-01: n=43 closed (UNCHANGED). LDO LONG still open.\n\nTONIGHT'S FINDINGS:\n  LDO LONG @ +0.69R (was +0.78R yesterday \u2014 slight pullback in consolidation).\n  MFE +1.14R, MAE -0.86R. Ratchet NOT armed (needs 2.50R; peaked 1.14R; gap 1.36R).\n  LDO feed: 27.0% frozen \u2014 data quality risk on this open trade.\n  Two transient HL 502 errors at 08:20-08:21 UTC (Oct-31). Retry logic handled them.\n  09:00 candle fired normally. No position was open at the time. No impact.\n\nSTATISTICAL STATE (unchanged, do not tune):\n  WR 32.6% (14W/29L), EV +0.013R/trade, t=+0.05 (NOT significant).\n  Breakeven WR 32.2%. Actual +0.4pp above \u2014 effectively zero gap.\n  Need ~45 more trades (n~88) before t>2.0.\n  Account from start_balance: +3.6% (36.73 -> 59.72). Peak was +22.1% (77.54).\n  Current drawdown from peak: ~15.3%.\n\nEXIT MECHANISM (main source of alpha, unchanged):\n  Ratcheted stops (14 trades): meanR +2.182R\n  Original stops (29 trades): meanR -1.034R\n  Arm rate 26% (11/42) vs 32.2% breakeven \u2014 gap 6.2pp.\n  Continuation bottleneck: 0.5R->1.0R = 56%. Once past 1.0R, 83%->1.5R, 87%->2.0R, 85%->2.5R.\n\nDIRECTION ASYMMETRY (accumulator):\n  SHORT: 15 trades, WR 40%, meanR +0.380R\n  LONG: 28 trades, WR 29%, meanR -0.183R\n  Gap: 0.563R/trade. Owner-locked; flag only.\n\nFEED QUALITY:\n  Clean (<3% frozen): n=26 closed trades, meanR +0.176R\n  Dirty (>=3% frozen): n=17 closed trades, meanR -0.236R\n  Delta: 0.412R/trade in favour of clean-feed coins.\n  8 coins >=10% frozen: LDO 27.0%, TIA 22.0%, NEAR 21.1%, FIL 20.8%,\n  OP 16.3%, XLM 15.4%, ATOM 12.3%, DOGE 10.9%.\n\nFOR KAMRAN (owner decisions):\n  1. BTC REMOVAL (29th session): n=7, WR 14%, sumR ~-8R. Bar met since session 1.\n  2. LDO active: +0.69R, 27% frozen. SL at original -1R. Managing OK.\n  3. DOGE: n=4, WR 0%, 10.9% frozen. One more loss = meets bar.\n  4. FEED QUALITY: 8 coins >=10% frozen drag the book. Consider removing LDO, TIA, NEAR, FIL.\n  5. ADX gate: 63.2% of long RSI-qualified setups blocked by ADX>40. Structural bottleneck.",
-  "suspended_coins": {},
+  "notes": "2026-11-04: n=45 closed. DOGE SL -15.2% at 03:01 UTC. BNB LONG opened 04:00.\n\nTONIGHT'S FINDINGS:\n  DOGE closed: 5th consecutive loss. n=5, WR 0%, AvgPnL -19.4%. BAR MET: remove from WATCHLIST.\n  LDO LONG still open: MFE +1.74R, NOW +0.25R (gave back 86% of peak). Feed 30.3% frozen.\n    Ratchet NOT armed: needs 2.50R, peaked 1.74R, gap 0.76R. SL at original -1R.\n    RISK: if LDO does not reach 2.5R and reverses, this trade closes at -1R on a dirty feed.\n  BNB LONG opened 04:00 UTC: RSI 23.9, ADX 23.0, stretch -4.15. Clean feed (2.4%).\n    Entry $685.16, SL $677.05, TP backstop $725.69. Valid S2 setup.\n\nSTATISTICAL STATE (unchanged, do not tune):\n  WR 33.3% (15W/30L), EV +0.042R/trade, t=+0.18 (NOT significant).\n  Need ~43 more trades (n~88) before t>2.0. Zero edge confirmed until then.\n  Peak equity: $777.54. Current DD from peak: ~7%. Start equity: $636.73.\n\nEXIT MECHANISM (main source of alpha, unchanged):\n  Ratcheted stops (15 trades): meanR +2.200R\n  Original stops (30 trades): meanR -1.036R\n  Arm rate 27% (12/44) under current regime (12/39 post-08-05 = 31%).\n  Continuation bottleneck: 0.5R->1.0R = 59%. Once past 1.0R: 85%->1.5R, 82%->2.0R, 86%->2.5R.\n\nDIRECTION ASYMMETRY (accumulator, structural):\n  SHORT: 16 trades, WR 44%, meanR +0.509R\n  LONG: 29 trades, WR 28%, meanR -0.215R\n  Gap: 0.724R/trade. Owner-locked; flag only.\n\nFEED QUALITY:\n  Clean (<3% frozen) n=23 closed: meanR +0.313R\n  Dirty (>=3% frozen) n=22 closed: meanR -0.241R\n  Delta: 0.554R/trade in favour of clean-feed coins.\n  9 coins >=10% frozen: LDO 30.3%, TIA 22.5%, FIL 22.1%, NEAR 20.1%,\n  XLM 18.9%, OP 18.3%, ATOM 13.5%, APT 12.6%, DOGE 11.1%.\n\nFOR KAMRAN (owner decisions):\n  1. DOGE REMOVAL: n=5, WR 0%, 11.1% frozen. Bar officially met tonight. Remove from WATCHLIST.\n  2. BTC REMOVAL (30th session): n=7, WR 14%, -16.3% AvgPnL. Bar met since session 1.\n  3. LDO open: +0.25R, 30.3% frozen. Only 0.76R from ratchet arm. Watch closely.\n  4. FEED QUALITY: 9 coins >=10% frozen. These drag -0.554R/trade vs clean coins.\n  5. SHORT edge: +0.509R mean vs LONG -0.215R. Consider whether entry RSI criteria\n     should be asymmetric (tighter LONG gate, wider SHORT gate).",
+  "suspended_coins": {
+    "DOGE": "2026-11-04"
+  },
   "engine": "S1_DISABLED - live engine is strategy2.py (mean reversion). Every parameter in this file (min_score, min_adx, trail_pct, tp_ratio, session_*, watchlist, signal_weights) belongs to the RETIRED liquidity-pool engine and has NO effect while S1_ENABLED=False in live.py. S2's parameters live in strategy2.py."
 }

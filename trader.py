@@ -36,8 +36,7 @@ WATCHLIST = [
     "AVAX",
     "ATOM",
     "OP",
-    "APT",
-    "DOGE"
+    "APT"
 ]
 
 # ── Strategy params ───────────────────────────────────────────────────────────

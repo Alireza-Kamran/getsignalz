@@ -75,6 +75,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.64.1 — 2026-11-04
+
+**Stats:** 46 trades · WR: 35% · P&L: +125.4%
+
+**Parameter changes (1):**
+- WATCHLIST: suspended DOGE  (WR=0%, AvgPnL=-19.4%)
+
+---
+
 ## v1.64.0 — 2026-11-03
 
 **Stats:** 44 trades · WR: 34% · P&L: +111.9%
