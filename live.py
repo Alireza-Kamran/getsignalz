@@ -503,8 +503,22 @@ def _check_trail_s2(positions, mids=None):
         if mfe_r < strategy2.TRAIL_START_R:
             continue
 
+        # Sanity guard: a corrupt or stale mid (testnet feed issues can return wild
+        # prices) would compute an absurdly large locked_r, place a stop at an
+        # impossible level, and immediately trigger it — leaving the position naked.
+        # TP_R is the theoretical ceiling; allow 3× headroom for fast movers.
+        # 2026-11-06: LDO bug — all_mids returned ~$0.978 (3× entry), computed
+        # locked_r=40.5, stop immediately triggered and could not fill at real price.
+        MAX_SANE_LOCKED_R = strategy2.TP_R * 3
         rung   = int((mfe_r - strategy2.TRAIL_START_R) / strategy2.TRAIL_STEP_R)
         locked = strategy2.TRAIL_START_R + rung * strategy2.TRAIL_STEP_R
+        if locked > MAX_SANE_LOCKED_R:
+            logger.error(
+                f"[S2] {coin} ratchet sanity check failed: computed locked={locked:.1f}R "
+                f"from price ${price:.5g} vs entry ${t['entry']:.5g} — "
+                f"suspected bad mid price, skipping this cycle"
+            )
+            continue
         new_sl = t["entry"] + d * locked * R
 
         improves = (new_sl > t["sl"]) if d == 1 else (new_sl < t["sl"])

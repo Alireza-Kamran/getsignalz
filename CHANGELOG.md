@@ -75,6 +75,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.65.0 — 2026-11-06
+
+**Stats:** 46 trades · WR: 35% · P&L: +125.4%
+
+**Code improvements (1):**
+- tracker.py: The 72h stale-position alert used a one-shot boolean so it fired once at 72h and went permanently silent. LDO has been open 185h on a 32.3%-frozen feed with the ratchet unarmed, and the last DM about it was sent ~113h ago. The fix removes the boolean gate from the outer condition and instead tracks the last alert band (stale_alerted_at_h) in state.json. It alerts at 72h, 120h, 168h, 216h … (every 48h). For LDO at 185h with no prior stale_alerted_at_h, _alert_band=168 and _last_alert=0, so the alert fires on the next tracker tick. Backward-compatible: existing records with stale_alerted_72h=True have no stale_alerted_at_h key, so _last_alert=0, which is below any real band, and they re-enter the recurring cadence correctly.
+
+---
+
 ## v1.64.2 — 2026-11-05
 
 **Stats:** 46 trades · WR: 35% · P&L: +125.4%
