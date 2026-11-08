@@ -75,6 +75,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.66.0 — 2026-11-08
+
+**Stats:** 48 trades · WR: 33% · P&L: +67.3%
+
+**Code improvements (1):**
+- analyze.py: The 0.10R tolerance fires false 'record is corrupt' alarms for legitimate ratcheted trades. When the ratchet arms at exactly +2.50R, peak_roe_pct is sampled by the 60s poll loop and may be recorded 0.04-0.18R below the locked level — documented from four trades in September 2026 (SOL/SUI 08-18, ETH 08-21, OP 09-14 all armed at +2.50R while peak read 2.32-2.46R). Since 0.10 < 0.18, those trades trigger the corrupt-record warning. 0.25R covers the worst measured gap with margin while still catching genuine corruption, which produces gaps >> 0.25R (the 2026-08-23 test_ratchet.py incident set locked_r=3.0 on a position with mfe near 0R — a gap of ~3R, caught trivially by any reasonable threshold). This false alarm appears in the full_report the AI brain reads nightly and can misdirect the session toward investigating a non-issue.
+
+---
+
 ## v1.65.1 — 2026-11-07
 
 **Stats:** 46 trades · WR: 35% · P&L: +125.4%

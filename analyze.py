@@ -1725,7 +1725,7 @@ def full_report():
                 # for two nights reading as a healthy armed ratchet.
                 _live_sl = float(_t.get("sl") or _stop)
                 _impl    = (_live_sl - _ent) * (_t.get("dir") or 1) / abs(_ent - _stop)
-                if float(_locked) > _mfe + 0.10:
+                if float(_locked) > _mfe + 0.25:
                     lines.append(f"    ⚠️  IMPOSSIBLE: locked "
                                  f"+{float(_locked):.2f}R exceeds MFE "
                                  f"{_mfe:+.2f}R — record is corrupt")
