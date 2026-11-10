@@ -75,6 +75,16 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.67.0 — 2026-11-10
+
+**Stats:** 48 trades · WR: 33% · P&L: +67.3%
+
+**Code improvements (2):**
+- live.py: The sanity check guard against a stale mid price (LDO 2026-11-06 incident) logs at ERROR but sends no owner DM. Every other failure path in _check_trail_s2 uses the naked_alerted pattern for a one-time notification. Adding the same deduplication here closes the observability gap without altering safety behavior: the cycle is still skipped, but the owner now learns about a bad mid price in real time instead of only on a manual bot.log audit.
+- live.py: Clear sanity_alerted when the ratchet successfully advances so a later stale-feed episode on the same position fires a fresh DM rather than staying permanently silent.
+
+---
+
 ## v1.66.1 — 2026-11-09
 
 **Stats:** 48 trades · WR: 33% · P&L: +67.3%

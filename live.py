@@ -518,6 +518,14 @@ def _check_trail_s2(positions, mids=None):
                 f"from price ${price:.5g} vs entry ${t['entry']:.5g} — "
                 f"suspected bad mid price, skipping this cycle"
             )
+            if not t.get("sanity_alerted"):
+                t["sanity_alerted"] = True
+                tg.dm_owner(
+                    f"⚠️ <b>[S2] {coin}</b>\n"
+                    f"سنیتی چک رچت فعال شد\n"
+                    f"mid ${price:.5g} vs entry ${t['entry']:.5g} → {locked:.1f}R (limit {MAX_SANE_LOCKED_R:.0f}R)\n"
+                    f"این چرخه رد شد"
+                )
             continue
         new_sl = t["entry"] + d * locked * R
 
@@ -547,6 +555,7 @@ def _check_trail_s2(positions, mids=None):
             continue
 
         t.pop("naked_alerted", None)
+        t.pop("sanity_alerted", None)
 
         t["sl"] = new_sl
         t["locked_r"] = locked
