@@ -2728,16 +2728,26 @@ def full_report():
     # instead and the dead ones are marked as dead.
     lines.append(f"\n── CURRENT STRATEGY CONFIG (LIVE = strategy2.py) ──")
     try:
-        import strategy2 as _s2
-        lines.append(f"  RSI:            {_s2.RSI_OVERSOLD} / {_s2.RSI_OVERBOUGHT}")
-        lines.append(f"  MAX_ADX:        {_s2.MAX_ADX}")
-        lines.append(f"  MIN_STRETCH_ATR:{_s2.MIN_STRETCH_ATR}")
-        lines.append(f"  SL_ATR_MULT:    {_s2.SL_ATR_MULT}")
-        lines.append(f"  TP_R:           {_s2.TP_R}  (backstop -- has never filled)")
-        lines.append(f"  TRAIL_START_R:  {_s2.TRAIL_START_R}   STEP_R: {_s2.TRAIL_STEP_R}")
-        lines.append(f"  MAX_TRADES:     {_s2.MAX_TRADES}")
-        lines.append(f"  S2_RISK_PCT:    {_s2.S2_RISK_PCT*100:.2f}% of account")
-        lines.append(f"  WATCHLIST:      {len(_s2.WATCHLIST)} coins")
+        import re as _re
+        _s2_text = open(os.path.join(os.path.dirname(__file__), "strategy2.py")).read()
+        def _c(name, cast=float):
+            m = _re.search(rf"^{name}\s*=\s*([^\s#\n]+)", _s2_text, _re.M)
+            return cast(m.group(1)) if m else None
+        def _clist(name):
+            m = _re.search(rf"^{name}\s*=\s*\[([^\]]+)\]", _s2_text, _re.M | _re.S)
+            if not m: return []
+            return [x.strip().strip('"').strip("'") for x in m.group(1).split(",") if x.strip()]
+        lines.append(f"  RSI:            {_c('RSI_OVERSOLD',int)} / {_c('RSI_OVERBOUGHT',int)}")
+        lines.append(f"  MAX_ADX:        {_c('MAX_ADX',int)}")
+        lines.append(f"  MIN_STRETCH_ATR:{_c('MIN_STRETCH_ATR')}")
+        lines.append(f"  SL_ATR_MULT:    {_c('SL_ATR_MULT')}")
+        lines.append(f"  TP_R:           {_c('TP_R')}  (backstop -- has never filled)")
+        lines.append(f"  TRAIL_START_R:  {_c('TRAIL_START_R')}   STEP_R: {_c('TRAIL_STEP_R')}")
+        lines.append(f"  MAX_TRADES:     {_c('MAX_TRADES',int)}")
+        rp = _c('S2_RISK_PCT')
+        lines.append(f"  S2_RISK_PCT:    {rp*100:.2f}% of account" if rp else "  S2_RISK_PCT:    n/a")
+        wl = _clist('WATCHLIST')
+        lines.append(f"  WATCHLIST:      {len(wl)} coins")
         lines.append(f"  (all owner-locked -- report, do not tune)")
     except Exception as e:
         lines.append(f"  (could not read strategy2 constants: {e})")

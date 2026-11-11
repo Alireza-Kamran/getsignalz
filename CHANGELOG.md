@@ -75,6 +75,19 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.68.0 — 2026-11-11
+
+**Stats:** 50 trades · WR: 34% · P&L: +62.9%
+
+**Parameter changes (2):**
+- WATCHLIST: re-added DOGE (7-day suspension ended)
+- WATCHLIST: suspended DOGE  (WR=0%, AvgPnL=-17.4%)
+
+**Code improvements (1):**
+- live.py: suspended_coins in strategy_config.json (DOGE added tonight after 0% WR over 5 trades) only blocks S1 coin selection — S2's find_setup() never sees it. A suspended coin whose ADX drops below 25 and RSI hits an extreme would still trigger an S2 entry. This threads suspended_coins into s2_open and adds a belt-and-suspenders explicit gate after find_setup(), using json (already imported in live.py) to read the config inline. The empty-dict sentinel {} matches the existing cooldown exclusion pattern exactly.
+
+---
+
 ## v1.67.0 — 2026-11-10
 
 **Stats:** 48 trades · WR: 33% · P&L: +67.3%

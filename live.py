@@ -1430,8 +1430,14 @@ def run():
                 s2_at_risk = sum(1 for c, t in _open_trades.items()
                                  if t.get("strategy") == "S2")
                 if s2_at_risk < strategy2.MAX_TRADES:
+                    try:
+                        with open("/root/trade/strategy_config.json") as _scf:
+                            _susp_exc = {c: {} for c in json.load(_scf).get("suspended_coins", {})}
+                    except Exception:
+                        _susp_exc = {}
                     s2_open = {**positions, **{c: {} for c in _open_trades},
-                               **{c: {} for c, exp in _cooldown_until.items() if int(time.time()) < exp}}
+                               **{c: {} for c, exp in _cooldown_until.items() if int(time.time()) < exp},
+                               **_susp_exc}
                     s2_best = strategy2.find_setup(s2_open)
                     # Belt-and-suspenders: the cooldown was already threaded into
                     # s2_open so find_setup should have excluded it — but NEAR
@@ -1442,6 +1448,9 @@ def run():
                     # channel or the exchange.
                     if s2_best and _cooldown_until.get(s2_best["coin"], 0) > int(time.time()):
                         logger.info(f"[S2] {s2_best['coin']} on entry-fail cooldown — skipping")
+                        s2_best = None
+                    if s2_best and s2_best["coin"] in _susp_exc:
+                        logger.info(f"[S2] {s2_best['coin']} in suspended_coins — skipping")
                         s2_best = None
                     # Logged even when empty: a scanner that only speaks when it
                     # fires is indistinguishable from a broken one, and this runs
