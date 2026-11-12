@@ -132,6 +132,80 @@ funding is Binance's 8-hour print, Hyperliquid's hourly rate differs in
 detail; a short squeeze can force margin top-ups. And it needs a spot leg,
 which the current bot does not trade.
 
+# ROUND 3 — positioning and order flow  (registered 2026-11-12)
+
+Owner's choice of direction after rounds 1-2 produced nothing: stop re-cutting
+price, bring in information the price rules never had. Registered before the
+positioning data had finished downloading and before any of it was read.
+
+Periods as before. The positioning dumps start 2021-12, so families H/I/J
+train on 2022-2024 (three years, not four -- weaker evidence, said up front).
+2025 has been used once, on the round-1 book; these signals have not seen it,
+but it is no longer a virgin year and a pass there is worth less than it
+would have been. The 2026 holdout is still unopened.
+
+All positioning inputs describe day D and are only complete at D+1 00:00, so
+every rule below acts on values lagged one full day.
+
+## G — cross-sectional taker flow
+
+Data: taker buy volume in the cached 1h klines (2020 ->), so 2021-2024 train.
+
+Rationale: a taker crosses the spread because they want in NOW. A coin whose
+volume has been persistently taker-bought relative to other coins has urgent
+demand behind it, and urgent flow tends to come in waves rather than at once.
+Prior, stated before running: CONTINUATION.
+
+Primary: weekly rebalance. Imbalance = sum(2*taker_buy - volume) / sum(volume)
+over the last 7 days. Long the top fifth, short the bottom fifth, equal
+weight, gross 1.0, dollar neutral, minimum 10 coins.
+
+Neighbourhood: window 3 / 14 days; top/bottom third; daily rebalance.
+
+If the primary is clearly NEGATIVE that is a rejection, not a discovery.
+Trading the reverse would be a new hypothesis with the opposite prior and has
+to be registered as one.
+
+## H — fade the crowd (cross-sectional)
+
+Rationale: the global long/short ACCOUNT ratio counts accounts, not money, so
+it is dominated by small traders. When far more of them than usual are long a
+coin, the marginal buyer is already in and the stops sit below. The oldest
+contrarian idea in futures, never tested here.
+
+Primary: weekly rebalance. For each coin, z-score the long/short account
+ratio against its own trailing 90 days. Short the fifth with the highest z
+(most crowded long versus their own norm), long the fifth with the lowest.
+Equal weight, gross 1.0, dollar neutral.
+
+Neighbourhood: z window 30 / 180 days; the raw ratio instead of the z-score;
+top/bottom third.
+
+## I — follow the large accounts (cross-sectional)
+
+Rationale: the top-trader POSITION ratio is weighted by size, so it reflects
+the accounts with the most capital and, presumably, the most information.
+
+Primary: same construction as H but on the top-trader position ratio and in
+the SAME direction: long the fifth with the highest 90-day z, short the
+lowest.
+
+Neighbourhood: z window 30 / 180 days; top-trader account ratio instead.
+
+## J — open interest confirms a breakout (time series)
+
+Rationale: a breakout on rising open interest is new positions being opened
+in its direction; one on falling open interest is the losing side closing,
+and has nobody left to push it.
+
+Primary: family A's primary (1d, 40-day breakout, 3 ATR stop, 3 ATR
+chandelier), taken only when open interest IN COINS is higher than it was 7
+days earlier. Judged against A itself over the same 2022-2024 window, and
+against its complement (breakouts on falling OI), which is the control: if
+the complement does as well, OI is not the reason.
+
+Neighbourhood: 3 / 14 days; OI must have risen by more than 5%.
+
 ---
 
 ## Results
