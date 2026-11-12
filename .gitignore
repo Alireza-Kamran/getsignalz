@@ -56,3 +56,7 @@ claude_brain.py
 
 # io_safe keeps one .bak generation beside every file it writes
 *.bak
+
+# Research lab: downloaded market data and derived caches (regenerate with
+# `python -m lab.data fetch`)
+lab/cache/

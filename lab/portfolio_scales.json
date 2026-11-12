@@ -1,0 +1,9 @@
+{
+ "target_vol": 15.0,
+ "fitted_on": "train",
+ "scales": {
+  "TREND_SSL": 0.08286641612968591,
+  "TREND_DON": 0.40826974422554796,
+  "XSMOM": 20.032614153786447
+ }
+}

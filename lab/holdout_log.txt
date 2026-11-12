@@ -1,0 +1,2 @@
+2026-11-12 03:02 UTC  check_s2_port: S2 port validation vs legacy on HL bars (baseline only, no selection)
+2026-11-12 03:03 UTC  check_s2_port: S2 port validation vs legacy on HL bars (baseline only, no selection)
