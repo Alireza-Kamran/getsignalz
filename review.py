@@ -337,9 +337,19 @@ def _self_improve():
         worst_signals = list(reversed(best_signals))
 
         # ── Apply all changes ────────────────────────────────────────────────────
-        config["updated_by"] = "auto-nightly"
-        save_config(config)
-        _patch_trader(config)
+        # Gated by the one report-only switch (see ai_brain.AUTO_EDIT_ENABLED).
+        # Frozen: the findings are still reported, as proposals, but neither
+        # strategy_config.json nor trader.py is rewritten, and `changes` is
+        # emptied so the restart and the changelog below do not claim work that
+        # was never applied.
+        from ai_brain import AUTO_EDIT_ENABLED
+        if AUTO_EDIT_ENABLED:
+            config["updated_by"] = "auto-nightly"
+            save_config(config)
+            _patch_trader(config)
+        else:
+            insights += [f"FROZEN, not applied: {c}" for c in changes]
+            changes = []
 
         # ── Build rich report ────────────────────────────────────────────────────
         now_s   = datetime.utcnow().strftime("%d %b %Y")

@@ -38,6 +38,14 @@ PROTECTED_STRINGS = [_PK, _ACCT]
 
 MAX_CHANGES = 12
 
+# REPORT-ONLY FREEZE (2026-11-12, owner decision). While the strategy upgrade is
+# being researched in lab/, nothing unattended may rewrite live code or config:
+# the brain still runs and its analysis and PROPOSED changes are still reported,
+# but none are written to disk. review._self_improve() reads this same flag to
+# skip its strategy_config.json / trader.py rewrite, so there is one switch, not
+# two that can drift. Set True only on the owner's say-so.
+AUTO_EDIT_ENABLED = False
+
 # Structural max of score_setup() in trader.py (CM Sling Shot: cloud 2 + entry 2 +
 # 4H 2 + ADX 1 + cloud-width 1). Not a tunable — only changes if scoring itself
 # is restructured, unlike MIN_SCORE which strategy_config.json controls nightly.
@@ -491,6 +499,15 @@ def run_ai_brain(keepalive=None) -> dict:
     result["analysis"] = parsed.get("analysis") or result["analysis"]
     result["summary"]  = parsed.get("summary", "")
     changes = parsed.get("changes", [])[:MAX_CHANGES]
+
+    if not AUTO_EDIT_ENABLED:
+        # Recorded as rejected WITH the reason, never silently dropped: "the
+        # brain proposed nothing" and "the proposals were frozen" must not look
+        # the same in the DM.
+        result["changes_rejected"] = [
+            {**c, "reject_reason": "auto-edit frozen (report-only mode)"}
+            for c in changes if isinstance(c, dict)]
+        return result
 
     # Load file contents (changes in same file stack correctly)
     file_contents = {f: _read(f) for f in EDITABLE_FILES}

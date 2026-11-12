@@ -160,52 +160,23 @@ produce a better value; it can only overwrite work in progress.
 If your analysis suggests one of them should change, SAY SO in the report and
 leave the code alone. Kamran decides these.
 
-You may still freely: fix bugs anywhere, improve reporting and analysis, adjust
-strategy_config.json (it belongs to the DISABLED S1 engine), and change any file
-other than strategy2.py.
+## REPORT-ONLY MODE — in force since 2026-11-12, by the owner'"'"'s decision
 
-## STEP 3 — Make actual changes
+A strategy upgrade is being researched by hand in /root/trade/lab/. Until the
+owner lifts this, tonight'"'"'s session OBSERVES AND REPORTS. It changes nothing:
 
-Based on your analysis, update /root/trade/strategy_config.json with improved values.
+- Do NOT edit, create, move or delete any file under /root/trade -- no code, no
+  strategy_config.json, no tests, nothing in lab/. The Edit and Write tools are
+  disabled for this session; do not work around that with shell redirection,
+  sed -i, python open(...,"w") or git.
+- Do NOT restart the bot, and do NOT commit or push.
+- Do NOT edit the memory files. The DM in STEP 6 is tonight'"'"'s record.
+- If you find a bug, describe it precisely in the report (file, line, evidence,
+  proposed fix). A human applies it.
 
-Then apply them:
-```python
-import sys; sys.path.insert(0, "/root/trade")
-from analyze import apply_config_to_trader, save_config, load_config
-config = load_config()
-
-# Make your changes to config dict here
-# config["min_score"] = 7  # example
-# config["trail_pct"] = 0.06  # example
-# config["signal_weights"]["ut_bot"] = 3  # example
-# config["notes"] = "Changed X because Y based on Z data"
-
-save_config(config)
-result = apply_config_to_trader()
-print(result)
-```
-
-If signal weights changed in strategy_config.json, also update the actual scoring logic in /root/trade/trader.py to match.
-
-Fix any bugs you found in bot.log. Be surgical — one bug, one fix.
-
-## STEP 4 — Update memory
-
-Update /root/.claude/projects/-root-trade/memory/project_trading_bot.md:
-- Add todays date section
-- What the data showed
-- What you changed and the exact evidence (e.g. "FVG win rate 71% vs OB 54% → increased FVG weight from 2 to 3")
-- What you decided NOT to change and why
-- Your current hypothesis about what makes signals work
-- What to observe tomorrow
-
-## STEP 5 — Restart if any .py file changed
-
-```bash
-systemctl restart getsignalz
-sleep 5
-systemctl status getsignalz --no-pager | head -3
-```
+Running read-only analysis (python3, grep, reading logs) is expected and fine.
+The working tree is fingerprinted before and after this session and the owner
+is alerted to any difference.
 
 ## STEP 6 — Report
 
@@ -235,8 +206,30 @@ OUT_TMP="$(mktemp)"
 # does not mention it. acceptEdits means the session can write strategy2.py; the
 # prompt forbids it, this proves whether the prompt was honoured.
 LOCKED_BEFORE="$(md5sum /root/trade/strategy2.py | cut -d" " -f1)"
-timeout 3600 "$CLAUDE_BIN" -p --model "$SELF_IMPROVE_MODEL" --permission-mode acceptEdits "$PROMPT" > "$OUT_TMP" 2>&1
+# REPORT-ONLY (2026-11-12): the edit tools are removed outright rather than
+# merely discouraged, and acceptEdits is gone. Bash stays, because the analysis
+# and the owner DM both need it -- which means a shell write is still POSSIBLE,
+# so the whole tree is fingerprinted as well, not just strategy2.py. `git status
+# --porcelain` covers tracked edits and new untracked files alike; gitignored
+# runtime state (journals, logs, state.json) is correctly excluded, since the
+# live bot rewrites those all night.
+TREE_BEFORE="$(git -C /root/trade status --porcelain 2>/dev/null | md5sum | cut -d" " -f1)"
+timeout 3600 "$CLAUDE_BIN" -p --disallowedTools "Edit,Write,NotebookEdit" --model "$SELF_IMPROVE_MODEL" --permission-mode default "$PROMPT" > "$OUT_TMP" 2>&1
 RC=$?
+TREE_AFTER="$(git -C /root/trade status --porcelain 2>/dev/null | md5sum | cut -d" " -f1)"
+if [ "$TREE_BEFORE" != "$TREE_AFTER" ]; then
+    echo "WARNING: working tree changed during a report-only session" >> "$LOG"
+    git -C /root/trade status --porcelain >> "$LOG" 2>&1
+    python3 - <<'TREEEOF' >> "$LOG" 2>&1
+import sys, subprocess
+sys.path.insert(0, "/root/trade")
+import tg
+d = subprocess.run(["git","-C","/root/trade","status","--porcelain"],
+                   capture_output=True, text=True).stdout[:1200]
+tg.dm_owner("\u26a0\ufe0f <b>Report-only nightly session changed the working tree</b>\n"
+            "<pre>" + tg.esc(d or "(status empty now)") + "</pre>")
+TREEEOF
+fi
 LOCKED_AFTER="$(md5sum /root/trade/strategy2.py | cut -d" " -f1)"
 if [ "$LOCKED_BEFORE" != "$LOCKED_AFTER" ]; then
     echo "WARNING: strategy2.py was modified despite being owner-locked" >> "$LOG"
