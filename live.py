@@ -49,6 +49,20 @@ TF     = "1h"     # primary timeframe
 # mean-reversion engine ever needs a companion again.
 S1_ENABLED = False
 
+# S2 NEW ENTRIES PAUSED -- owner decision 2026-11-12.
+# lab/run_h0.py measured the deployed S2 rule on 2021-2025 (25 coins, real
+# prices, costs on): -0.18R per trade, t=-3.6, negative in every single year,
+# negative even with costs removed. The seven-month backtest that justified it
+# was positive only because a rounding artefact in strategy2.signal kept a
+# lucky random half of the signals (see lab/REPORT.md). Continuing to trade it
+# writes expected losses into the channel's permanent record.
+#
+# This pauses ENTRIES ONLY. Everything that manages an existing position --
+# _check_closed, _check_trail_s2, _verify_stops, the watchdog -- sits above
+# this gate in the loop and is untouched, so an open trade is still ratcheted
+# and still closed normally. Set True only when a rule has passed lab/gates.py.
+S2_ENTRIES_ENABLED = False
+
 # ── Internal state ─────────────────────────────────────────────────────────────
 _open_trades    = {}
 _cooldown_until = {}   # coin -> epoch-seconds when 1h SL cooldown expires
@@ -1103,6 +1117,8 @@ def run():
                 f"{strategy2.TF} | RSI {strategy2.RSI_OVERSOLD}/"
                 f"{strategy2.RSI_OVERBOUGHT} | ADX<{strategy2.MAX_ADX} | all hours")
     logger.info("  Quiet: 02:00-04:00 UTC (scanning only)")
+    if not S2_ENTRIES_ENABLED:
+        logger.info("  S2 NEW ENTRIES: PAUSED — open positions still managed")
     logger.info("="*55)
 
     tracker.start()
@@ -1429,7 +1445,12 @@ def run():
             try:
                 s2_at_risk = sum(1 for c, t in _open_trades.items()
                                  if t.get("strategy") == "S2")
-                if s2_at_risk < strategy2.MAX_TRADES:
+                if not S2_ENTRIES_ENABLED:
+                    # Said every candle, on purpose: a paused scanner must not
+                    # look like a broken one in the log.
+                    logger.info("[S2] new entries PAUSED (S2_ENTRIES_ENABLED=False) "
+                                f"— managing {s2_at_risk} open position(s) only")
+                elif s2_at_risk < strategy2.MAX_TRADES:
                     try:
                         with open("/root/trade/strategy_config.json") as _scf:
                             _susp_exc = {c: {} for c in json.load(_scf).get("suspended_coins", {})}
