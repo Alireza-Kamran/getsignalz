@@ -75,6 +75,14 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.68.2 — 2026-11-13
+
+**Stats:** 50 trades · WR: 34% · P&L: +62.9%
+
+⚠️ **Review incomplete — the nightly AI brain did not run.** No parameters were examined. Error: `claude CLI error (rc=1): API Error: Your account can't receive replies from Claude right now. You can find the next step in the Anthropic Verification Portal: https://portal.anthropic.com/verify?org=9`
+
+---
+
 ## v1.68.1 — 2026-11-12
 
 **Stats:** 50 trades · WR: 34% · P&L: +62.9%
