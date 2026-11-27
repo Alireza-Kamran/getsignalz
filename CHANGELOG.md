@@ -75,6 +75,15 @@ failed on every real close; it now snapshots at start. Fixed a permission regres
 
 ---
 
+## v1.68.9 — 2026-11-27
+
+**Stats:** 50 trades · WR: 34% · P&L: +62.9%
+
+⚠️ **Review incomplete — the nightly AI brain did not run.** No parameters were examined. Error: `claude CLI error (rc=1): You've hit your weekly limit · resets 2pm (UTC)
+`
+
+---
+
 ## v1.68.8 — 2026-11-26
 
 **Stats:** 50 trades · WR: 34% · P&L: +62.9%
